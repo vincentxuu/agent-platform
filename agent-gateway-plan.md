@@ -1,4 +1,4 @@
-# Agent Gateway Console 規劃文件
+# Agent Gateway 規劃文件
 
 **Date:** 2026-05-14
 **Status:** Draft
@@ -6,7 +6,7 @@
 
 ## 1. 產品定位
 
-Agent Gateway Console 是一個以 Flow 為核心的 AI Agent Workflow Platform。它不是單一萬能聊天機器人，而是讓使用者用 Web GUI 選擇、配置、執行、監控與驗證多種 AI agent workflows。
+Agent Gateway 是一個以 Flow 為核心的 AI Agent Workflow Platform。它不是單一萬能聊天機器人，而是讓使用者用 Web GUI 選擇、配置、執行、監控與驗證多種 AI agent workflows。
 
 一句話定位：
 
@@ -47,7 +47,7 @@ Agent Gateway Console 是一個以 Flow 為核心的 AI Agent Workflow Platform�
 ## 4. 系統分層
 
 ```text
-Web Console
+Web UI
   ↓
 Flow Definition Layer
   ↓
@@ -76,13 +76,13 @@ Evidence / Audit Store
 Artifact System
 ```
 
-### 4.1 Web Console
+### 4.1 Web UI
 
 負責讓使用者完成任務，而不是面對空白 prompt。
 
 主要頁面：
 
-- **Run Console:** 選 flow、填 inputs、選 preset、啟動 run、看 streaming progress。
+- **Run:** 選 flow、填 inputs、選 preset、啟動 run、看 streaming progress。
 - **Flows:** 管理 workflow template、版本、輸入欄位、step graph。
 - **Skills:** 管理可版本化能力包、觸發條件、權限、eval 與發布狀態。
 - **Providers:** 管理 LLM、Search、Reader、Knowledge、Action providers。
@@ -482,7 +482,7 @@ Metrics 類型：
 - **Provider health:** success rate、latency p95、quota errors、rate limit errors、fallback usage。
 - **Skill health:** usage count、eval pass rate、cost trend、stale status、proposal count、regression failures。
 
-Console 視圖：
+UI 視圖：
 
 - Run timeline
 - Step detail
@@ -648,7 +648,7 @@ ToolOverlapWarning
 
 ### 4.9 Memory System
 
-Memory 是 harness 資產，不只是 Learning Loop 的輸出。Agent Gateway Console 應 local-first 擁有 memory，避免把使用者偏好、團隊規則、run history 與 workflow know-how 鎖在外部 provider。
+Memory 是 harness 資產，不只是 Learning Loop 的輸出。Agent Gateway 應 local-first 擁有 memory，避免把使用者偏好、團隊規則、run history 與 workflow know-how 鎖在外部 provider。
 
 Memory 類型：
 
@@ -988,12 +988,12 @@ Artifact 應支援：
 
 ## 6. MVP 範圍
 
-第一版應以 Deep Research Console 作為 showcase，但底層抽象保持通用 Flow。
+第一版應以 Deep Research 作為 showcase，但底層抽象保持通用 Flow。
 
 ### 6.1 MVP 必做
 
-- Web Console
-- Flow list + Run Console
+- Web UI
+- Flow list + Run
 - Deep Research flow
 - Quick / Standard / Deep 三個 presets
 - Local skill package support
@@ -1339,7 +1339,7 @@ Run request
 
 ## 11. 建議下一步
 
-1. 保持產品名稱 Agent Gateway Console，定位為通用 flow-based agent workflow platform。
+1. 保持產品名稱 Agent Gateway，定位為通用 flow-based agent workflow platform。
 2. 定義 Deep Research flow 的 v1 schema。
 3. 定義 Skill package schema：`skill.yaml`、`SKILL.md`、permissions、evals。
 4. 定義 Context Management v1：context block schema、budget allocation、tool selection、compression policy。
@@ -1349,7 +1349,7 @@ Run request
 8. 定義 Observability v1：trace span schema、run metrics、provider / skill / tool / context metrics。
 9. 定義 MCP server / tool discovery 與 ToolInvocation schema。
 10. 定義 Provider capability schema。
-11. 畫出 Web Console IA 與 Run Console wireframe。
+11. 畫出 Web UI IA 與 Run wireframe。
 12. 先做 local-first MVP，不碰 cloud sync。
 13. 建立第一個 end-to-end run：topic -> assemble context -> plan skill -> select search MCP tool -> read -> extract evidence skill -> synthesize -> verify -> markdown artifact -> checkpoint / eval / trace。
 14. 讓 Learning Loop 先只 capture trace / signal / proposal，不自動修改 production skill / memory / policy。

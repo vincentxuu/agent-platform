@@ -17,7 +17,7 @@ Agent Platform 不是單一萬能聊天機器人，而是一個可配置的 AI A
 ## 系統分層
 
 ```
-Web Console → Flow Definition → Skill System → Learning Loop
+Web UI → Flow Definition → Skill System → Learning Loop
 → Evaluation → Observability → Policy Engine → Context Management
 → Memory System → Runtime Controls → AI Agent Harness
 → MCP / Provider Router / A2A Adapter → Evidence / Audit Store → Artifact System
@@ -27,7 +27,7 @@ Web Console → Flow Definition → Skill System → Learning Loop
 
 | 功能 | 說明 |
 |------|------|
-| **Run Console** | 選 flow、填 inputs、選 preset、啟動 run、看 streaming progress |
+| **Run** | 選 flow、填 inputs、選 preset、啟動 run、看 streaming progress |
 | **Flow Management** | 管理 workflow template、版本、輸入欄位、step graph |
 | **Skill System** | 可安裝、可版本化、可觸發、可審計的能力包 |
 | **Provider Router** | 統一管理 LLM、Search、Reader、Knowledge、Action providers |
@@ -38,7 +38,7 @@ Web Console → Flow Definition → Skill System → Learning Loop
 
 ## MVP 範圍
 
-**第一版以 Deep Research Console 為 showcase，底層保持通用 Flow 抽象。**
+**第一版以 Deep Research 為 showcase，底層保持通用 Flow 抽象。**
 
 ### 內建 Flows
 
@@ -67,7 +67,7 @@ Web Console → Flow Definition → Skill System → Learning Loop
 
 ## 文件
 
-- [`agent-gateway-console-plan.md`](./agent-gateway-console-plan.md) — 完整規劃文件，包含系統分層、資料模型、API shape、技術架構與風險分析
+- [`agent-gateway-plan.md`](./agent-gateway-plan.md) — 完整規劃文件，包含系統分層、資料模型、API shape、技術架構與風險分析
 
 ## 狀態
 
