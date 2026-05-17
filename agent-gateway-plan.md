@@ -6,15 +6,15 @@
 
 ## 1. 產品定位
 
-Agent Gateway 是一個以 Flow 為核心的 AI Agent Workflow Platform。它不是單一萬能聊天機器人，而是讓使用者用 Web GUI 選擇、配置、執行、監控與驗證多種 AI agent workflows。
+Agent Gateway 是一個 AI Agent Platform，提供 provider routing、policy control、evidence tracking 與 artifact generation，讓使用者透過 Web UI 選擇、配置、執行、監控與驗證多種 AI agent workflows。
 
 一句話定位：
 
-> A flow-based AI Agent Gateway with provider routing, policy control, agent harness execution, evidence tracking, and artifact generation.
+> AI Agent Platform with provider routing, policy control, evidence tracking, and artifact generation.
 
 中文定位：
 
-> 一個可配置的 AI Agent 工作流閘道，統一管理模型、工具、資料來源、執行策略、驗證機制與最終產物。
+> 一個可配置的 AI Agent 平台，統一管理模型、工具、資料來源、執行策略、驗證機制與最終產物。
 
 ## 2. 使用者意圖
 

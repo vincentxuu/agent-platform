@@ -1,8 +1,6 @@
 # Agent Platform
 
-一個以 Flow 為核心的 AI Agent Workflow Platform。讓使用者透過 Web GUI 選擇、配置、執行、監控與驗證多種 AI agent workflows。
-
-> A flow-based AI Agent Gateway with provider routing, policy control, agent harness execution, evidence tracking, and artifact generation.
+AI Agent Platform with provider routing, policy control, evidence tracking, and artifact generation.
 
 ## 產品定位
 
