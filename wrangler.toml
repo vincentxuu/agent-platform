@@ -1,0 +1,51 @@
+name = "agent-platform"
+main = "apps/worker/src/index.ts"
+compatibility_date = "2026-05-21"
+compatibility_flags = ["nodejs_compat"]
+assets = { directory = "apps/web/dist", binding = "ASSETS" }
+
+[[d1_databases]]
+binding = "DB"
+database_name = "agent-platform"
+database_id = "f6d45425-7dd7-4625-8991-7142cb949712"
+migrations_dir = "packages/db/migrations"
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "608d1fb3c4424146abe50ab56e246aca"
+
+[[r2_buckets]]
+binding = "ARTIFACTS"
+bucket_name = "agent-platform-artifacts"
+
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "agent-platform-knowledge"
+
+[[queues.producers]]
+binding = "RUN_QUEUE"
+queue = "agent-platform-runs"
+
+[[queues.consumers]]
+queue = "agent-platform-runs"
+max_batch_size = 5
+max_batch_timeout = 10
+
+[[workflows]]
+name = "agent-platform-deep-research"
+binding = "DEEP_RESEARCH_WORKFLOW"
+class_name = "DeepResearchWorkflow"
+
+[[durable_objects.bindings]]
+name = "RUN_COORDINATOR"
+class_name = "RunCoordinator"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RunCoordinator"]
+
+[ai]
+binding = "AI"
+
+[vars]
+ENVIRONMENT = "development"

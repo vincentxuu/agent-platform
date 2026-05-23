@@ -1,0 +1,9 @@
+id: report-synthesizer
+name: Report Synthesizer
+version: 1.0.0
+description: Synthesizes evidence-backed findings into a Markdown report and artifact-ready evidence bundle.
+permissions:
+  - provider:llm
+evals:
+  - output-schema
+  - artifact-format

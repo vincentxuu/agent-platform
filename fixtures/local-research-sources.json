@@ -1,0 +1,56 @@
+{
+  "sources": [
+    {
+      "id": "cloudflare-workflows",
+      "title": "Durable step orchestration",
+      "url": "local://sources/cloudflare-workflows",
+      "provider": "local-fixture-search",
+      "freshnessDays": 30,
+      "excerpt": "Durable workflows should split long-running agent work into retryable, inspectable steps with checkpointed inputs and outputs.",
+      "claims": [
+        "Long-running research agents need durable step boundaries, retry records, and checkpoints to be operable.",
+        "Workflow state should be inspectable separately from the final artifact so operators can diagnose stalled or failed runs."
+      ],
+      "tags": ["workflow", "durable", "retry", "checkpoint", "agent", "orchestration"]
+    },
+    {
+      "id": "evidence-artifacts",
+      "title": "Evidence-backed artifacts",
+      "url": "local://sources/evidence-artifacts",
+      "provider": "local-fixture-reader",
+      "freshnessDays": 45,
+      "excerpt": "Claims in generated reports are more useful when they carry citation links to source excerpts and are exported with a machine-readable evidence bundle.",
+      "claims": [
+        "Research output should pair human-readable reports with structured evidence bundles.",
+        "Citation metadata makes generated claims auditable after the run completes."
+      ],
+      "tags": ["evidence", "artifact", "citation", "report", "audit"]
+    },
+    {
+      "id": "provider-policy",
+      "title": "Provider routing and policy control",
+      "url": "local://sources/provider-policy",
+      "provider": "local-fixture-router",
+      "freshnessDays": 60,
+      "excerpt": "Provider selection, tool permissions, budgets, and human approval rules should be explicit runtime policy instead of hidden prompt text.",
+      "claims": [
+        "Provider routing becomes safer when cost, tool permissions, and approval rules are represented as runtime policy.",
+        "Policy checks should be recorded with each run so failures and approvals remain traceable."
+      ],
+      "tags": ["provider", "policy", "tool", "budget", "approval", "routing"]
+    },
+    {
+      "id": "local-runnable-path",
+      "title": "Local runnable development path",
+      "url": "local://sources/local-runnable-path",
+      "provider": "local-fixture-runtime",
+      "freshnessDays": 15,
+      "excerpt": "A platform skeleton is not usable until developers can start it locally, create a run, watch status progress, and download outputs without cloud bindings.",
+      "claims": [
+        "A local API path shortens feedback loops by exercising the same UI contract without requiring production bindings.",
+        "Automated smoke tests should prove that a run can progress from creation to completed artifacts."
+      ],
+      "tags": ["local", "api", "smoke", "developer", "ui", "artifact"]
+    }
+  ]
+}

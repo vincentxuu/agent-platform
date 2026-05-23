@@ -1,0 +1,10 @@
+id: citation-extractor
+name: Citation Extractor
+version: 1.0.0
+description: Extracts claims, citations, excerpts, source mappings, conflicts, and confidence from read sources.
+permissions:
+  - provider:llm
+  - reader:read
+evals:
+  - output-schema
+  - citation-quality

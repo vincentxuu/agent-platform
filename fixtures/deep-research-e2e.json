@@ -1,0 +1,27 @@
+{
+  "input": {
+    "flow": "deep_research",
+    "preset": "standard",
+    "topic": "agent workflow orchestration",
+    "audience": "engineering leaders",
+    "freshness_days": 365
+  },
+  "expected": {
+    "steps": [
+      "clarify",
+      "build_brief",
+      "plan",
+      "search",
+      "rank_sources",
+      "read_sources",
+      "extract_evidence",
+      "synthesize",
+      "verify",
+      "export"
+    ],
+    "artifacts": ["markdown_report", "json_evidence_bundle"],
+    "traceRequired": true,
+    "checkpointRequired": true,
+    "evalCaptureRequired": true
+  }
+}

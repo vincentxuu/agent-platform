@@ -1,0 +1,8 @@
+id: source-ranker
+name: Source Ranker
+version: 1.0.0
+description: Ranks candidate sources by relevance, freshness, authority, and coverage.
+permissions:
+  - provider:llm
+evals:
+  - output-schema

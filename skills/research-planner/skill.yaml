@@ -1,0 +1,9 @@
+id: research-planner
+name: Research Planner
+version: 1.0.0
+description: Plans research subquestions, source strategy, and stopping conditions for Deep Research.
+permissions:
+  - provider:llm
+evals:
+  - trigger
+  - output-schema

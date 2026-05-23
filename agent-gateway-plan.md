@@ -76,6 +76,40 @@ Evidence / Audit Store
 Artifact System
 ```
 
+### 4.0 Cloudflare-first deployment mapping
+
+正式架構改為 Cloudflare-first，本機 runtime 只保留為開發替身與測試 harness。
+
+```text
+Browser
+  ↓
+Cloudflare Workers + Workers Assets
+  ↓
+RunCoordinator Durable Object
+  ↓
+Cloudflare Workflows
+  ↓
+Cloudflare Queues for side jobs
+  ↓
+Flow Runtime / Policy / Provider Router / Skill System
+  ↓
+D1 metadata + KV cache + R2 artifacts/evidence + Workers AI/provider adapters
+```
+
+服務邊界：
+
+| 平台能力 | Cloudflare 服務 | 責任 |
+|----------|-----------------|------|
+| Web console | Workers Assets | 服務 `apps/web` 靜態管理介面 |
+| API gateway | Workers | `/api/health`、`/api/flows`、`/api/runs`、auth/policy/provider routing |
+| Durable execution state | Durable Objects | 每個 run 一個 coordinator，維持單一寫入者與即時狀態 |
+| Durable flow execution | Workflows | flow step execution、pause/resume、retry、step status |
+| Background jobs | Queues | eval、artifact export、provider health、非阻塞 retry jobs |
+| Relational contract | D1 | 既有 `packages/db/migrations` schema |
+| Large output | R2 | report、evidence bundle、step output、proposal diff |
+| Fast state/cache | KV | session、idempotency、provider health、UI run snapshot |
+| Native model option | Workers AI | 可由 provider router 當作 LLM provider 之一 |
+
 ### 4.1 Web UI
 
 負責讓使用者完成任務，而不是面對空白 prompt。
@@ -1118,18 +1152,21 @@ Artifact 應支援：
 
 ## 8. 技術架構建議
 
-### 8.1 Local-first runtime
+### 8.1 Cloudflare-first runtime
 
-初期建議採 local-first：
+初期部署目標改為 Cloudflare-first：
 
-- 本機 Web GUI
-- 本機 DB
-- 本機 credentials
-- 本機 evidence / artifacts
-- Docker deployable
-- optional cloud sync later
+- Workers 提供 API gateway、policy boundary 與 provider router
+- Workers Assets 服務 Web GUI
+- D1 保存 flow/run/step/policy/skill/evidence/eval metadata
+- R2 保存大型 evidence、artifact、report 與 step output
+- KV 保存 session、idempotency key、provider health 與短期 run snapshot
+- Workflows 執行 Deep Research 這類長任務 flow step、retry、pause/resume
+- Queues 執行 eval、export、provider health、非阻塞 retry 等背景 jobs
+- Durable Objects 管理單一 run 的即時狀態協調與 checkpoint fan-out
+- Workers AI 作為 provider router 可選的 edge model provider
 
-這接近 9Router 的友善部署模式，也能降低 credentials 信任成本。
+本機 in-memory runtime 保留為開發、單元檢查與 adapter contract 測試替身。
 
 ### 8.2 API shape
 
