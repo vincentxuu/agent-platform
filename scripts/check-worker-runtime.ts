@@ -99,7 +99,7 @@ async function assertConfigEditing() {
 
   const reloaded = await getJson("/api/config");
   if (reloaded.config.flow.defaultAudience !== "研究團隊" || reloaded.config.policy.maxIterations !== 5) {
-    throw new Error("Expected Worker config GET to return saved editable settings from KV");
+    throw new Error("Expected Worker config GET to return saved editable settings from D1");
   }
 
   const skills = await getJson("/api/skills");

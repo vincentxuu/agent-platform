@@ -51,6 +51,51 @@
         "Automated smoke tests should prove that a run can progress from creation to completed artifacts."
       ],
       "tags": ["local", "api", "smoke", "developer", "ui", "artifact"]
+    },
+    {
+      "id": "arxiv-rag-survey-2312-10997",
+      "title": "Retrieval-Augmented Generation for Large Language Models: A Survey",
+      "url": "https://arxiv.org/abs/2312.10997",
+      "alphaXivUrl": "https://www.alphaxiv.org/abs/2312.10997",
+      "arxivId": "2312.10997",
+      "provider": "local-fixture-arxiv",
+      "freshnessDays": 120,
+      "excerpt": "The survey organizes retrieval-augmented generation around retrieval, generation, augmentation process, evaluation, and downstream application dimensions.",
+      "claims": [
+        "RAG systems can be summarized at multiple levels by separating retrieval design, generator integration, evaluation, and application patterns.",
+        "A useful paper reading report should connect each claim to a paper-level source and preserve enough metadata for later inspection."
+      ],
+      "tags": ["arxiv", "paper", "rag", "retrieval", "augmented", "generation", "survey", "llm"]
+    },
+    {
+      "id": "arxiv-rag-token-2005-11401",
+      "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+      "url": "https://arxiv.org/abs/2005.11401",
+      "alphaXivUrl": "https://www.alphaxiv.org/abs/2005.11401",
+      "arxivId": "2005.11401",
+      "provider": "local-fixture-arxiv",
+      "freshnessDays": 365,
+      "excerpt": "The paper combines a parametric sequence-to-sequence model with a non-parametric memory accessed through dense retrieval.",
+      "claims": [
+        "Early RAG work frames retrieved passages as an external memory that can improve knowledge-intensive generation.",
+        "Paper reading flows should distinguish the core method, evidence, limitations, and follow-up questions."
+      ],
+      "tags": ["arxiv", "paper", "rag", "retrieval", "generation", "knowledge", "nlp"]
+    },
+    {
+      "id": "arxiv-hyde-2212-10496",
+      "title": "Precise Zero-Shot Dense Retrieval without Relevance Labels",
+      "url": "https://arxiv.org/abs/2212.10496",
+      "alphaXivUrl": "https://www.alphaxiv.org/abs/2212.10496",
+      "arxivId": "2212.10496",
+      "provider": "local-fixture-arxiv",
+      "freshnessDays": 240,
+      "excerpt": "HyDE first generates a hypothetical document and then uses it as the dense retrieval query representation.",
+      "claims": [
+        "Generated intermediate documents can be used as retrieval scaffolding when relevance labels are unavailable.",
+        "Comparing retrieval scaffolds helps a reader identify when RAG improvements come from query formulation rather than generation alone."
+      ],
+      "tags": ["arxiv", "paper", "hyde", "dense", "retrieval", "rag", "query"]
     }
   ]
 }

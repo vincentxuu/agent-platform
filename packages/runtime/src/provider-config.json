@@ -1,0 +1,200 @@
+{
+  "defaultAllowedProviderIds": [
+    "workers_ai",
+    "groq",
+    "openai",
+    "anthropic",
+    "gemini",
+    "openrouter",
+    "tavily",
+    "exa",
+    "jina_search",
+    "brave_search",
+    "serpapi",
+    "bing_search",
+    "search",
+    "jina"
+  ],
+  "providers": [
+    {
+      "id": "workers_ai",
+      "name": "Workers AI",
+      "type": "llm",
+      "enabled": true,
+      "credentialRefs": ["AI binding"],
+      "readinessKeys": ["AI"],
+      "models": ["@cf/meta/llama-3.1-8b-instruct", "@cf/meta/llama-3.3-70b-instruct-fp8-fast"],
+      "activeModel": "@cf/meta/llama-3.1-8b-instruct"
+    },
+    {
+      "id": "groq",
+      "name": "Groq",
+      "type": "llm",
+      "enabled": false,
+      "credentialRefs": ["GROQ_API_KEY"],
+      "readinessKeys": ["GROQ_API_KEY"],
+      "models": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"],
+      "activeModel": "llama-3.3-70b-versatile"
+    },
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "type": "llm",
+      "enabled": false,
+      "credentialRefs": ["OPENAI_API_KEY"],
+      "readinessKeys": ["OPENAI_API_KEY"],
+      "models": ["gpt-4.1", "gpt-4.1-mini", "o4-mini"],
+      "activeModel": "gpt-4.1-mini"
+    },
+    {
+      "id": "anthropic",
+      "name": "Anthropic",
+      "type": "llm",
+      "enabled": false,
+      "credentialRefs": ["ANTHROPIC_API_KEY"],
+      "readinessKeys": ["ANTHROPIC_API_KEY"],
+      "models": ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
+      "activeModel": "claude-3-5-sonnet-latest"
+    },
+    {
+      "id": "gemini",
+      "name": "Google Gemini",
+      "type": "llm",
+      "enabled": false,
+      "credentialRefs": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+      "readinessKeys": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+      "models": ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
+      "activeModel": "gemini-2.0-flash"
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "type": "llm",
+      "enabled": false,
+      "credentialRefs": ["OPENROUTER_API_KEY"],
+      "readinessKeys": ["OPENROUTER_API_KEY"],
+      "models": ["openrouter/auto"],
+      "activeModel": "openrouter/auto"
+    },
+    {
+      "id": "nvidia",
+      "name": "NVIDIA",
+      "type": "llm",
+      "enabled": false,
+      "credentialRefs": ["NVIDIA_API_KEY"],
+      "readinessKeys": ["NVIDIA_API_KEY"],
+      "models": ["meta/llama-3.1-70b-instruct", "nvidia/llama-3.1-nemotron-70b-instruct"],
+      "activeModel": "meta/llama-3.1-70b-instruct"
+    },
+    {
+      "id": "cerebras",
+      "name": "Cerebras",
+      "type": "llm",
+      "enabled": false,
+      "credentialRefs": ["CEREBRAS_API_KEY"],
+      "readinessKeys": ["CEREBRAS_API_KEY"],
+      "models": ["llama-3.3-70b", "llama3.1-8b"],
+      "activeModel": "llama-3.3-70b"
+    },
+    {
+      "id": "ollama_cloud",
+      "name": "Ollama Cloud",
+      "type": "llm",
+      "enabled": false,
+      "credentialRefs": ["OLLAMA_CLOUD_API_KEY", "OLLAMA_API_KEY"],
+      "readinessKeys": ["OLLAMA_CLOUD_API_KEY", "OLLAMA_API_KEY"],
+      "models": ["gpt-oss:20b", "llama3.2"],
+      "activeModel": "gpt-oss:20b"
+    },
+    {
+      "id": "ollama",
+      "name": "Ollama",
+      "type": "llm",
+      "enabled": false,
+      "credentialRefs": ["OLLAMA_API_BASE", "OLLAMA_HOST", "OLLAMA_URL"],
+      "readinessKeys": ["OLLAMA_API_BASE", "OLLAMA_HOST", "OLLAMA_URL"],
+      "models": ["llama3.2", "qwen2.5", "mistral"],
+      "activeModel": "llama3.2"
+    },
+    {
+      "id": "tavily",
+      "name": "Tavily Search",
+      "type": "search",
+      "enabled": false,
+      "credentialRefs": ["TAVILY_API_KEY"],
+      "readinessKeys": ["TAVILY_API_KEY"],
+      "models": ["tavily-search", "tavily-extract"],
+      "activeModel": "tavily-search"
+    },
+    {
+      "id": "exa",
+      "name": "Exa Search",
+      "type": "search",
+      "enabled": false,
+      "credentialRefs": ["EXA_API_KEY"],
+      "readinessKeys": ["EXA_API_KEY"],
+      "models": ["exa-search", "exa-contents", "exa-answer"],
+      "activeModel": "exa-search"
+    },
+    {
+      "id": "jina_search",
+      "name": "Jina Search",
+      "type": "search",
+      "enabled": false,
+      "credentialRefs": ["JINA_SEARCH_API_KEY", "JINA_API_KEY"],
+      "readinessKeys": ["JINA_SEARCH_API_KEY", "JINA_API_KEY"],
+      "models": ["jina-search", "jina-reader", "jina-reranker-v2-base-multilingual"],
+      "activeModel": "jina-search"
+    },
+    {
+      "id": "brave_search",
+      "name": "Brave Search",
+      "type": "search",
+      "enabled": false,
+      "credentialRefs": ["BRAVE_SEARCH_API_KEY"],
+      "readinessKeys": ["BRAVE_SEARCH_API_KEY"],
+      "models": ["brave-web-search", "brave-news-search", "brave-local-search"],
+      "activeModel": "brave-web-search"
+    },
+    {
+      "id": "serpapi",
+      "name": "SerpAPI",
+      "type": "search",
+      "enabled": false,
+      "credentialRefs": ["SERPAPI_API_KEY"],
+      "readinessKeys": ["SERPAPI_API_KEY"],
+      "models": ["google-search", "google-scholar", "google-news"],
+      "activeModel": "google-search"
+    },
+    {
+      "id": "bing_search",
+      "name": "Bing Web Search",
+      "type": "search",
+      "enabled": false,
+      "credentialRefs": ["BING_SEARCH_API_KEY"],
+      "readinessKeys": ["BING_SEARCH_API_KEY"],
+      "models": ["bing-web-search", "bing-news-search"],
+      "activeModel": "bing-web-search"
+    },
+    {
+      "id": "search",
+      "name": "Search Router",
+      "type": "search",
+      "enabled": false,
+      "credentialRefs": ["TAVILY_API_KEY", "EXA_API_KEY", "JINA_SEARCH_API_KEY"],
+      "readinessKeys": ["TAVILY_API_KEY", "EXA_API_KEY", "JINA_SEARCH_API_KEY"],
+      "models": ["tavily-search", "exa-search", "jina-search"],
+      "activeModel": "tavily-search"
+    },
+    {
+      "id": "jina",
+      "name": "Jina Reader",
+      "type": "reader",
+      "enabled": false,
+      "credentialRefs": ["JINA_API_KEY"],
+      "readinessKeys": ["JINA_API_KEY"],
+      "models": ["jina-reader", "jina-reranker-v2-base-multilingual"],
+      "activeModel": "jina-reader"
+    }
+  ]
+}

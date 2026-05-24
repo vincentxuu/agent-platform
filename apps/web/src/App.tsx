@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Boxes, CirclePlay, FileText, Gauge, History, Layers3, Settings2, ShieldCheck } from "lucide-react";
+import { BookOpen, Boxes, CheckCircle2, CirclePlay, FileOutput, FileText, Gauge, History, KeyRound, Layers3, Plus, Search, Settings2, ShieldCheck, Sparkles } from "lucide-react";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
@@ -23,6 +23,8 @@ type EvidenceItem = {
   source: string;
   sourceTitle: string;
   sourceUrl: string;
+  alphaXivUrl?: string;
+  arxivId?: string;
   excerpt: string;
   confidence: string;
   conflicts: string;
@@ -69,7 +71,7 @@ type FlowSummary = {
   version: number;
   hasDraft?: boolean;
   presets: Array<{ id: string; name: string }>;
-  steps: Array<{ id: string; type: string; skill?: string }>;
+  steps: Array<{ id: string; type: string; skill?: string; providerRole?: string }>;
   artifacts: Array<{ id: string; type: string }>;
   definition?: Record<string, unknown>;
   draft?: Record<string, unknown>;
@@ -116,6 +118,8 @@ type ManagementConfig = {
     name: string;
     enabled: boolean;
     credentialRef: string;
+    credentialConfigured?: boolean;
+    credentialSource?: string;
     models: string[];
     activeModel: string;
   }>;
@@ -131,6 +135,22 @@ type ManagementConfig = {
     source: string;
   }>;
 };
+
+type ManagedProvider = ManagementConfig["providers"][number];
+
+const stepStarterCards = [
+  { id: "search", icon: Search, type: "tool_group", providerRole: "search", skill: "", labelKey: "searchStep", detailKey: "searchStepDetail" },
+  { id: "read", icon: BookOpen, type: "tool_group", providerRole: "reader", skill: "", labelKey: "readStep", detailKey: "readStepDetail" },
+  { id: "extract", icon: Sparkles, type: "agent", providerRole: "", skill: "citation-extractor@1.0.0", labelKey: "extractStep", detailKey: "extractStepDetail" },
+  { id: "summarize", icon: FileText, type: "agent", providerRole: "", skill: "report-synthesizer@1.0.0", labelKey: "summarizeStep", detailKey: "summarizeStepDetail" },
+  { id: "verify", icon: CheckCircle2, type: "verifier", providerRole: "", skill: "", labelKey: "verifyStep", detailKey: "verifyStepDetail" },
+  { id: "export", icon: FileOutput, type: "artifact", providerRole: "", skill: "", labelKey: "exportStep", detailKey: "exportStepDetail" }
+] as const;
+
+const artifactStarterCards = [
+  { id: "markdown_report", type: "markdown_report", labelKey: "markdownReport", detailKey: "markdownReportDetail" },
+  { id: "evidence_bundle", type: "json_evidence_bundle", labelKey: "evidenceBundle", detailKey: "evidenceBundleDetail" }
+] as const;
 
 const navGroups = [
   {
@@ -153,7 +173,8 @@ const navGroups = [
     items: [
       { id: "evidence", key: "evidence", badge: "06", icon: ShieldCheck },
       { id: "artifacts", key: "artifacts", badge: "07", icon: FileText },
-      { id: "manage", key: "manage", badge: "08", icon: Settings2 }
+      { id: "api_keys", key: "apiKeys", badge: "08", icon: KeyRound },
+      { id: "manage", key: "manage", badge: "09", icon: Settings2 }
     ]
   }
 ] as const;
@@ -216,19 +237,8 @@ export function App() {
     };
     updateFromHash();
     window.addEventListener("hashchange", updateFromHash);
-    const observer = new IntersectionObserver((entries) => {
-      const visible = entries
-        .filter((entry) => entry.isIntersecting)
-        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
-      if (visible?.target.id) setActiveSection(visible.target.id);
-    }, { rootMargin: "-18% 0px -68% 0px", threshold: [0.12, 0.4] });
-    for (const id of sectionIds) {
-      const element = document.getElementById(id);
-      if (element) observer.observe(element);
-    }
     return () => {
       window.removeEventListener("hashchange", updateFromHash);
-      observer.disconnect();
     };
   }, []);
 
@@ -325,7 +335,7 @@ export function App() {
       </aside>
 
       <section className="workspace" id="main-content">
-        <section id="run" className="panel">
+        {activeSection === "run" ? <section id="run" className="panel">
           <div className="panel-heading">
             <div>
               <h2>{t("run.title")}</h2>
@@ -378,6 +388,7 @@ export function App() {
           </form>
           {runError ? <div className="error-box">{runError}</div> : null}
           <pre className="summary">{JSON.stringify(policySummary, null, 2)}</pre>
+          {activeFlow ? <FlowRunInfo flow={activeFlow} /> : null}
           <div className="subsection">
             <div className="panel-heading compact">
               <h3>{t("run.recentRuns")}</h3>
@@ -385,13 +396,13 @@ export function App() {
             </div>
             <RunHistory runs={runs.data?.runs || []} selectedRunId={selectedRunId} onSelect={setSelectedRunId} />
           </div>
-        </section>
+        </section> : null}
 
-        <section id="define" className="panel">
+        {activeSection === "define" ? <section id="define" className="panel">
           <FlowDefine flows={flowList} selectedFlowId={selectedFlowId} onSelect={setSelectedFlowId} />
-        </section>
+        </section> : null}
 
-        <section id="timeline" className="panel">
+        {activeSection === "timeline" ? <section id="timeline" className="panel">
           <div className="panel-heading">
             <h2>{t("timeline.title")}</h2>
             <div className="button-row">
@@ -401,36 +412,46 @@ export function App() {
           </div>
           <Timeline run={activeRun} />
           <pre className="summary">{JSON.stringify(activeRun?.detail || { status: "idle" }, null, 2)}</pre>
-        </section>
+        </section> : null}
 
-        <section id="context" className="panel">
+        {activeSection === "context" ? <section id="context" className="panel">
           <h2>{t("context.title")}</h2>
           <div className="grid">
             {(activeRun?.detail?.contextBlocks as Array<Record<string, unknown>> | undefined || fallbackContextBlocks()).map((item, index) => (
               <InfoCard key={index} title={String(item.type || item.source || `context-${index + 1}`)} meta={`${item.tokens || "-"} tokens`} body={String(item.source || item.detail || t("context.runtimeContext"))} />
             ))}
           </div>
-        </section>
+        </section> : null}
 
-        <section id="observability" className="panel">
+        {activeSection === "observability" ? <section id="observability" className="panel">
           <h2>{t("observability.title")}</h2>
           <Observability report={observability.data?.observability} />
-        </section>
+        </section> : null}
 
-        <section id="evidence" className="panel">
+        {activeSection === "evidence" ? <section id="evidence" className="panel">
           <h2>{t("evidence.title")}</h2>
           <Evidence runId={activeRun?.id} evidence={activeRun?.evidence || []} />
-        </section>
+        </section> : null}
 
-        <section id="artifacts" className="panel">
+        {activeSection === "artifacts" ? <section id="artifacts" className="panel">
           <h2>{t("artifacts.title")}</h2>
           <Artifacts runId={activeRun?.id} artifacts={activeRun?.artifacts || []} />
-        </section>
+        </section> : null}
 
-        <section id="manage" className="panel">
+        {activeSection === "api_keys" ? <section id="api_keys" className="panel">
+          <div className="panel-heading">
+            <div>
+              <h2>{t("manage.apiKeys")}</h2>
+              <p className="muted">{t("manage.apiKeysSubtitle")}</p>
+            </div>
+          </div>
+          {activeConfig ? <ApiKeySetupPanel providers={activeConfig.providers} /> : <div className="empty">{t("manage.loading")}</div>}
+        </section> : null}
+
+        {activeSection === "manage" ? <section id="manage" className="panel">
           <h2>{t("manage.title")}</h2>
           <Management config={activeConfig} readiness={readiness.data} skills={skills.data} />
-        </section>
+        </section> : null}
       </section>
     </main>
   );
@@ -451,12 +472,38 @@ function RunHistory({ runs, selectedRunId, onSelect }: { runs: RunView[]; select
   );
 }
 
+function FlowRunInfo({ flow }: { flow: FlowSummary }) {
+  const { t } = useTranslation();
+  return (
+    <div className="flow-run-info">
+      <InfoCard
+        title={t("run.selectedFlowInfo")}
+        meta={`${flow.steps.length} ${t("run.steps")} · ${flow.artifacts.length} ${t("run.outputs")}`}
+        body={`${flow.name}: ${flow.description || ""}`}
+      />
+      <div className="grid tight">
+        {flow.steps.map((step) => (
+          <InfoCard
+            key={step.id}
+            title={t(`steps.${step.id}`, step.id)}
+            meta={step.type}
+            body={step.skill ? `${t("run.skill")} ${step.skill}` : t("run.runtimeStep")}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function FlowDefine({ flows, selectedFlowId, onSelect }: { flows: FlowSummary[]; selectedFlowId: string; onSelect: (flowId: string) => void }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const selected = flows.find((flow) => flow.id === selectedFlowId) || flows[0];
   const [draftText, setDraftText] = useState("");
   const [commandResult, setCommandResult] = useState("");
+  const [newStep, setNewStep] = useState({ id: "", type: "agent", skill: "", providerRole: "" });
+  const [newArtifact, setNewArtifact] = useState({ id: "markdown_report", type: "markdown_report" });
+  const draftDefinition = useMemo(() => parseDraftDefinition(draftText), [draftText]);
 
   useEffect(() => {
     if (selected) {
@@ -465,15 +512,33 @@ function FlowDefine({ flows, selectedFlowId, onSelect }: { flows: FlowSummary[];
     }
   }, [selected?.id, selected?.updatedAt, selected?.hasDraft]);
 
+  useEffect(() => {
+    const current = flows.find((flow) => flow.id === selectedFlowId);
+    if (current?.source !== "built-in") return;
+    const latestDraft = flows
+      .filter((flow) => flow.source === "user" && flow.hasDraft)
+      .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))[0];
+    if (latestDraft) onSelect(latestDraft.id);
+  }, [flows, selectedFlowId, onSelect]);
+
   const refreshFlows = async () => {
     await queryClient.invalidateQueries({ queryKey: ["flows"] });
   };
 
   const createFlow = useMutation({
-    mutationFn: () => apiPost("/api/flows", { name: "Custom Research Flow", id: `custom_research_${Date.now().toString(36)}` }),
+    mutationFn: () => apiPost("/api/flows", {
+      name: "Untitled Flow",
+      id: `custom_flow_${Date.now().toString(36)}`
+    }),
     onSuccess: async (payload) => {
       setCommandResult(t("define.created"));
-      if (payload.flow?.id) onSelect(payload.flow.id);
+      if (payload.flow) {
+        queryClient.setQueryData(["flows"], (current: any) => ({
+          ...(current || {}),
+          flows: [payload.flow, ...((current?.flows || []) as FlowSummary[]).filter((flow) => flow.id !== payload.flow.id)]
+        }));
+        onSelect(payload.flow.id);
+      }
       await refreshFlows();
     },
     onError: (error) => setCommandResult(error instanceof Error ? error.message : t("define.failed"))
@@ -483,14 +548,20 @@ function FlowDefine({ flows, selectedFlowId, onSelect }: { flows: FlowSummary[];
     mutationFn: () => apiPost(`/api/flows/${selectedFlowId}/clone`, { id: `${selectedFlowId}_copy_${Date.now().toString(36)}` }),
     onSuccess: async (payload) => {
       setCommandResult(t("define.cloned"));
-      if (payload.flow?.id) onSelect(payload.flow.id);
+      if (payload.flow) {
+        queryClient.setQueryData(["flows"], (current: any) => ({
+          ...(current || {}),
+          flows: [payload.flow, ...((current?.flows || []) as FlowSummary[]).filter((flow) => flow.id !== payload.flow.id)]
+        }));
+        onSelect(payload.flow.id);
+      }
       await refreshFlows();
     },
     onError: (error) => setCommandResult(error instanceof Error ? error.message : t("define.failed"))
   });
 
   const saveDraft = useMutation({
-    mutationFn: () => apiPatch(`/api/flows/${selectedFlowId}`, { definition: JSON.parse(draftText) }),
+    mutationFn: () => apiPatch(`/api/flows/${selectedFlowId}`, { definition: normalizeBuilderDefinition(JSON.parse(draftText)) }),
     onSuccess: async (payload) => {
       setCommandResult(payload.validation?.length ? `${t("define.savedWithErrors")}\n${payload.validation.join("\n")}` : t("define.saved"));
       await refreshFlows();
@@ -517,6 +588,63 @@ function FlowDefine({ flows, selectedFlowId, onSelect }: { flows: FlowSummary[];
   });
 
   if (!selected) return <div className="empty">{t("define.empty")}</div>;
+  const canEdit = selected.source !== "built-in";
+
+  const updateDraft = (updater: (definition: Record<string, any>) => Record<string, any>) => {
+    const current = draftDefinition || selected.draft || selected.definition || selected;
+    setDraftText(JSON.stringify(updater({ ...current }), null, 2));
+  };
+
+  const addStep = () => {
+    const id = sanitizeUiId(newStep.id);
+    if (!id) return;
+    updateDraft((definition) => {
+      const steps = Array.isArray(definition.steps) ? definition.steps : [];
+      if (steps.some((step: any) => step.id === id)) return definition;
+      const step: Record<string, string> = { id, type: newStep.type };
+      if (newStep.skill.trim()) step.skill = newStep.skill.trim();
+      if (newStep.providerRole.trim()) step.providerRole = newStep.providerRole.trim();
+      return normalizeBuilderDefinition({ ...definition, steps: [...steps, step] });
+    });
+    setNewStep({ id: "", type: "agent", skill: "", providerRole: "" });
+  };
+
+  const addStarterStep = (starter: typeof stepStarterCards[number]) => {
+    updateDraft((definition) => {
+      const steps = Array.isArray(definition.steps) ? definition.steps : [];
+      const id = createUniqueBuilderId(starter.id, steps.map((step: any) => step.id));
+      const step: Record<string, string> = { id, type: starter.type };
+      if (starter.skill) step.skill = starter.skill;
+      if (starter.providerRole) step.providerRole = starter.providerRole;
+      return normalizeBuilderDefinition({ ...definition, steps: [...steps, step] });
+    });
+  };
+
+  const removeStep = (stepId: string) => {
+    updateDraft((definition) => normalizeBuilderDefinition({
+      ...definition,
+      steps: (Array.isArray(definition.steps) ? definition.steps : []).filter((step: any) => step.id !== stepId)
+    }));
+  };
+
+  const addArtifact = () => {
+    const id = sanitizeUiId(newArtifact.id);
+    if (!id) return;
+    updateDraft((definition) => {
+      const artifacts = Array.isArray(definition.artifacts) ? definition.artifacts : [];
+      if (artifacts.some((artifact: any) => artifact.id === id)) return definition;
+      return normalizeBuilderDefinition({ ...definition, artifacts: [...artifacts, { id, type: newArtifact.type || id }] });
+    });
+    setNewArtifact({ id: "evidence_bundle", type: "json_evidence_bundle" });
+  };
+
+  const addStarterArtifact = (starter: typeof artifactStarterCards[number]) => {
+    updateDraft((definition) => {
+      const artifacts = Array.isArray(definition.artifacts) ? definition.artifacts : [];
+      const id = createUniqueBuilderId(starter.id, artifacts.map((artifact: any) => artifact.id));
+      return normalizeBuilderDefinition({ ...definition, artifacts: [...artifacts, { id, type: starter.type }] });
+    });
+  };
 
   return (
     <div className="define-surface">
@@ -530,6 +658,21 @@ function FlowDefine({ flows, selectedFlowId, onSelect }: { flows: FlowSummary[];
           <Button type="button" variant="secondary" onClick={() => cloneFlow.mutate()} disabled={cloneFlow.isPending}>{t("define.clone")}</Button>
         </div>
       </div>
+      <div className="builder-intro">
+        <div>
+          <strong>{t("define.builderTitle")}</strong>
+          <span>{t("define.builderBody")}</span>
+        </div>
+        <Badge variant="secondary">{t("define.builder")}</Badge>
+      </div>
+      <div className="flow-build-steps" aria-label={t("define.buildGuide")}>
+        {["nameFlow", "addSteps", "addOutputs", "savePublish"].map((key, index) => (
+          <div className="build-step" key={key}>
+            <span>{index + 1}</span>
+            <strong>{t(`define.${key}`)}</strong>
+          </div>
+        ))}
+      </div>
       <div className="flow-command-grid">
         <aside className="flow-list">
           {flows.map((flow) => (
@@ -540,11 +683,126 @@ function FlowDefine({ flows, selectedFlowId, onSelect }: { flows: FlowSummary[];
           ))}
         </aside>
         <div className="flow-editor">
-          <div className="card-heading">
-            <h3>{selected.name}</h3>
+          <div className="builder-header">
+            <div>
+              <h3>{selected.name}</h3>
+              <p>{canEdit ? t("define.editingDraft") : t("define.builtInReadOnly")}</p>
+            </div>
             <Badge variant="success">{selected.hasDraft ? t("define.draft") : `${t("define.version")} ${selected.version}`}</Badge>
           </div>
-          <Textarea rows={18} value={draftText} onChange={(event) => setDraftText(event.target.value)} disabled={selected.source === "built-in" && !selected.hasDraft} />
+          <div className="flow-builder">
+            <div className="builder-fields">
+              <Label>
+                {t("define.flowName")}
+                <Input
+                  id="flow-name-input"
+                  value={String(draftDefinition?.name || "")}
+                  disabled={!canEdit}
+                  onChange={(event) => updateDraft((definition) => ({ ...definition, name: event.target.value }))}
+                />
+              </Label>
+              <Label>
+                {t("define.flowDescription")}
+                <Input
+                  id="flow-description-input"
+                  value={String(draftDefinition?.description || "")}
+                  disabled={!canEdit}
+                  onChange={(event) => updateDraft((definition) => ({ ...definition, description: event.target.value }))}
+                />
+              </Label>
+            </div>
+            <div className="builder-section-heading">
+              <div>
+                <h4>{t("define.stepsTitle")}</h4>
+                <p>{t("define.stepsHelp")}</p>
+              </div>
+            </div>
+            <FlowStepMap flow={{ ...selected, steps: (draftDefinition?.steps as FlowSummary["steps"]) || selected.steps }} onRemove={canEdit ? removeStep : undefined} />
+            {canEdit ? <div className="builder-action-panel">
+              <div className="builder-section-heading compact">
+                <div>
+                  <h4>{t("define.quickAddStep")}</h4>
+                  <p>{t("define.quickAddStepHelp")}</p>
+                </div>
+              </div>
+              <div className="step-palette">
+                {stepStarterCards.map((starter) => (
+                  <button type="button" className="step-palette-card" key={starter.id} onClick={() => addStarterStep(starter)}>
+                    <starter.icon size={18} strokeWidth={2.2} />
+                    <span>
+                      <strong>{t(`define.${starter.labelKey}`)}</strong>
+                      <small>{t(`define.${starter.detailKey}`)}</small>
+                    </span>
+                    <Plus size={16} aria-hidden="true" />
+                  </button>
+                ))}
+              </div>
+              <details className="custom-step-panel" open>
+                <summary>{t("define.customStep")}</summary>
+                <div className="builder-add-row">
+                  <Label>
+                    {t("define.stepIdLabel")}
+                    <Input id="step-id-input" placeholder={t("define.stepId")} value={newStep.id} onChange={(event) => setNewStep({ ...newStep, id: event.target.value })} />
+                  </Label>
+                  <Label>
+                    {t("define.stepType")}
+                    <Select id="step-type-select" value={newStep.type} onChange={(event) => setNewStep({ ...newStep, type: event.target.value })}>
+                      <option value="agent">agent</option>
+                      <option value="tool_group">tool_group</option>
+                      <option value="transform">transform</option>
+                      <option value="verifier">verifier</option>
+                      <option value="artifact">artifact</option>
+                    </Select>
+                  </Label>
+                  <Label>
+                    {t("define.stepSkillLabel")}
+                    <Input id="step-skill-input" placeholder={t("define.stepSkill")} value={newStep.skill} onChange={(event) => setNewStep({ ...newStep, skill: event.target.value })} />
+                  </Label>
+                  <Label>
+                    {t("define.providerRoleLabel")}
+                    <Input id="step-provider-role-input" placeholder={t("define.providerRole")} value={newStep.providerRole} onChange={(event) => setNewStep({ ...newStep, providerRole: event.target.value })} />
+                  </Label>
+                  <Button type="button" variant="secondary" onClick={addStep}>{t("define.addStep")}</Button>
+                </div>
+              </details>
+            </div> : null}
+            <div className="builder-section-heading">
+              <div>
+                <h4>{t("define.outputsTitle")}</h4>
+                <p>{t("define.outputTemplateBody")}</p>
+              </div>
+            </div>
+            <ArtifactMap artifacts={(draftDefinition?.artifacts as FlowSummary["artifacts"]) || selected.artifacts} />
+            {canEdit ? <div className="builder-action-panel">
+              <div className="artifact-palette">
+                {artifactStarterCards.map((starter) => (
+                  <button type="button" className="artifact-palette-card" key={starter.id} onClick={() => addStarterArtifact(starter)}>
+                    <strong>{t(`define.${starter.labelKey}`)}</strong>
+                    <small>{t(`define.${starter.detailKey}`)}</small>
+                  </button>
+                ))}
+              </div>
+              <div className="builder-add-row artifact-row">
+                <Label>
+                  {t("define.artifactIdLabel")}
+                  <Input id="artifact-id-input" placeholder={t("define.artifactId")} value={newArtifact.id} onChange={(event) => setNewArtifact({ ...newArtifact, id: event.target.value })} />
+                </Label>
+                <Label>
+                  {t("define.artifactType")}
+                  <Select id="artifact-type-select" value={newArtifact.type} onChange={(event) => setNewArtifact({ ...newArtifact, type: event.target.value })}>
+                    <option value="markdown_report">markdown_report</option>
+                    <option value="json_evidence_bundle">json_evidence_bundle</option>
+                    <option value="json">json</option>
+                  </Select>
+                </Label>
+                <Button type="button" variant="secondary" onClick={addArtifact}>{t("define.addArtifact")}</Button>
+              </div>
+            </div> : null}
+          </div>
+          <details className="advanced-json">
+            <summary>{t("define.advancedJson")}</summary>
+            <Textarea rows={18} value={draftText} onChange={(event) => setDraftText(event.target.value)} disabled={selected.source === "built-in" && !selected.hasDraft} />
+          </details>
           <div className="button-row">
             <Button type="button" onClick={() => saveDraft.mutate()} disabled={saveDraft.isPending || selected.source === "built-in"}>{t("define.save")}</Button>
             <Button type="button" onClick={() => publishDraft.mutate()} disabled={publishDraft.isPending || !selected.hasDraft}>{t("define.publish")}</Button>
@@ -553,6 +811,43 @@ function FlowDefine({ flows, selectedFlowId, onSelect }: { flows: FlowSummary[];
           {commandResult ? <pre className="summary compact">{commandResult}</pre> : null}
         </div>
       </div>
+    </div>
+  );
+}
+
+function FlowStepMap({ flow, onRemove }: { flow: FlowSummary; onRemove?: (stepId: string) => void }) {
+  const { t } = useTranslation();
+  if (flow.steps.length === 0) {
+    return <div className="builder-empty">{t("define.noSteps")}</div>;
+  }
+  return (
+    <div className="flow-step-map">
+      {flow.steps.map((step, index) => (
+        <div className="flow-step-chip" key={step.id}>
+          <span className="step-number">{index + 1}</span>
+          <div>
+            <strong>{t(`steps.${step.id}`, step.id)}</strong>
+            <span>{step.type}</span>
+            <small>{step.skill || step.providerRole || t("run.runtimeStep")}</small>
+          </div>
+          {onRemove ? <button type="button" className="mini-danger" onClick={() => onRemove(step.id)}>{t("define.remove")}</button> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ArtifactMap({ artifacts }: { artifacts: FlowSummary["artifacts"] }) {
+  const { t } = useTranslation();
+  if (artifacts.length === 0) return <div className="builder-empty">{t("define.noArtifacts")}</div>;
+  return (
+    <div className="artifact-chip-list">
+      {artifacts.map((artifact) => (
+        <span className="artifact-chip" key={artifact.id}>
+          <strong>{artifact.id}</strong>
+          <small>{artifact.type}</small>
+        </span>
+      ))}
     </div>
   );
 }
@@ -613,6 +908,8 @@ function Evidence({ runId, evidence }: { runId?: string; evidence: EvidenceItem[
           <p>{item.claim}</p>
           <p className="muted">{item.excerpt}</p>
           <a href={item.sourceUrl} target="_blank" rel="noreferrer">{item.sourceUrl}</a>
+          {item.alphaXivUrl ? <a href={item.alphaXivUrl} target="_blank" rel="noreferrer">alphaXiv: {item.alphaXivUrl}</a> : null}
+          {item.arxivId ? <small>arXiv ID: {item.arxivId}</small> : null}
           <div className="button-row">
             <Button type="button" variant="secondary" onClick={() => review.mutate({ index, status: "accepted", note: t("evidence.approvedNote") })}>{t("evidence.approve")}</Button>
             <Button type="button" variant="secondary" onClick={() => review.mutate({ index, status: "rejected", note: t("evidence.rejectedNote") })}>{t("evidence.reject")}</Button>
@@ -741,6 +1038,14 @@ function Management({ config, readiness, skills }: { config?: ManagementConfig; 
       </Card>
       <Card>
         <CardHeader>
+          <CardTitle>{t("manage.apiKeys")}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ApiKeySetupPanel providers={config.providers} />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
           <div className="card-heading">
           <CardTitle>{t("manage.improvements")}</CardTitle>
           <Button type="button" variant="secondary" onClick={() => createImprovement.mutate()} disabled={createImprovement.isPending}>{t("manage.createImprovement")}</Button>
@@ -763,11 +1068,15 @@ function Management({ config, readiness, skills }: { config?: ManagementConfig; 
         </div>
         </CardHeader>
         <CardContent>
-        <div className="provider-list">
-          {config.providers.map((provider) => (
-            <ProviderRow key={provider.id} provider={provider} allowed={config.policy.allowedProviders.includes(provider.id)} />
-          ))}
-        </div>
+        <ModelCatalogPanel providers={config.providers} allowedProviders={config.policy.allowedProviders} />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("manage.testModel")}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ModelTestPanel providers={config.providers} />
         </CardContent>
       </Card>
       <Card>
@@ -782,6 +1091,242 @@ function Management({ config, readiness, skills }: { config?: ManagementConfig; 
         </div>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function ApiKeySetupPanel({ providers }: { providers: ManagedProvider[] }) {
+  const { t } = useTranslation();
+  return (
+    <div className="api-key-panel">
+      <p className="muted">{t("manage.apiKeysHelp")}</p>
+      {providers.map((provider) => <ApiKeyRow key={provider.id} provider={provider} />)}
+    </div>
+  );
+}
+
+function ApiKeyRow({ provider }: { provider: ManagedProvider }) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const refs = provider.credentialRef.split(/\s+or\s+| 或 |,\s*/).map((item) => item.trim()).filter(Boolean);
+  const secretRefs = refs.filter((ref) => /^[A-Z0-9_]+$/.test(ref));
+  const [credentialRef, setCredentialRef] = useState(secretRefs[0] || refs[0] || provider.credentialRef);
+  const [value, setValue] = useState("");
+  const [status, setStatus] = useState("");
+
+  const refresh = async () => {
+    await queryClient.invalidateQueries({ queryKey: ["config"] });
+    await queryClient.invalidateQueries({ queryKey: ["providers"] });
+    await queryClient.invalidateQueries({ queryKey: ["readiness"] });
+  };
+  const saveCredential = useMutation({
+    mutationFn: () => apiPost(`/api/providers/${provider.id}/credential`, { credentialRef, value }),
+    onSuccess: async () => {
+      setValue("");
+      setStatus(t("manage.apiKeySaved"));
+      await refresh();
+    },
+    onError: (error) => setStatus(error instanceof Error ? error.message : t("manage.apiKeySaveFailed"))
+  });
+  const clearCredential = useMutation({
+    mutationFn: () => apiDelete(`/api/providers/${provider.id}/credential`),
+    onSuccess: async () => {
+      setStatus(t("manage.apiKeyCleared"));
+      await refresh();
+    },
+    onError: (error) => setStatus(error instanceof Error ? error.message : t("manage.apiKeyClearFailed"))
+  });
+
+  return (
+    <div className="api-key-row">
+      <div>
+        <strong>{provider.name}</strong>
+        <span>{provider.credentialRef}</span>
+        <small>{provider.credentialConfigured ? t("manage.apiKeyConfigured", { source: provider.credentialSource }) : t("manage.apiKeyMissing")}</small>
+      </div>
+      {secretRefs.length > 0 ? (
+        <div className="api-key-form">
+          <Label>
+            {t("manage.credentialRef")}
+            <Select value={credentialRef} onChange={(event) => setCredentialRef(event.target.value)}>
+              {secretRefs.map((ref) => <option key={ref} value={ref}>{ref}</option>)}
+            </Select>
+          </Label>
+          <Label>
+            {t("manage.apiKeyValue")}
+            <Input
+              type="password"
+              value={value}
+              placeholder={t("manage.apiKeyPlaceholder")}
+              onChange={(event) => setValue(event.target.value)}
+            />
+          </Label>
+          <div className="button-row">
+            <Button type="button" onClick={() => saveCredential.mutate()} disabled={saveCredential.isPending || !value.trim()}>{t("manage.saveApiKey")}</Button>
+            <Button type="button" variant="secondary" onClick={() => clearCredential.mutate()} disabled={clearCredential.isPending || !provider.credentialConfigured}>{t("manage.clearApiKey")}</Button>
+          </div>
+          <small>{t("manage.apiKeyStoredInConfig")}</small>
+          <code>npx wrangler secret put {credentialRef}</code>
+          {status ? <span className="status-line">{status}</span> : null}
+        </div>
+      ) : (
+        <small>{t("manage.bindingConfigured")}</small>
+      )}
+    </div>
+  );
+}
+
+function ModelCatalogPanel({ providers, allowedProviders }: { providers: ManagedProvider[]; allowedProviders: string[] }) {
+  const { t } = useTranslation();
+  return (
+    <div className="provider-catalog">
+      {providers.map((provider) => (
+        <ProviderCatalogRow key={provider.id} provider={provider} allowed={allowedProviders.includes(provider.id)} />
+      ))}
+      {providers.length === 0 ? <div className="empty">{t("manage.noProviders")}</div> : null}
+    </div>
+  );
+}
+
+function ProviderCatalogRow({ provider, allowed }: { provider: ManagedProvider; allowed: boolean }) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const [customModel, setCustomModel] = useState("");
+  const [result, setResult] = useState("");
+  const enabledCount = provider.enabled ? provider.models.length : 0;
+
+  const refresh = async () => {
+    await queryClient.invalidateQueries({ queryKey: ["config"] });
+    await queryClient.invalidateQueries({ queryKey: ["providers"] });
+    await queryClient.invalidateQueries({ queryKey: ["readiness"] });
+  };
+  const updateProvider = useMutation({
+    mutationFn: (body: Record<string, unknown>) => apiPatch(`/api/providers/${provider.id}`, body),
+    onSuccess: async () => {
+      await refresh();
+      setResult(t("manage.saved"));
+    },
+    onError: (error) => setResult(error instanceof Error ? error.message : t("manage.saveFailed"))
+  });
+  const syncModels = useMutation({
+    mutationFn: () => apiPost(`/api/providers/${provider.id}/models/sync`, {}),
+    onSuccess: async (payload) => {
+      await refresh();
+      setResult(
+        Number(payload.added) > 0
+          ? t("manage.syncDone", { added: payload.added, existing: payload.existing, total: payload.total })
+          : t("manage.syncNoChanges", { total: payload.total })
+      );
+    },
+    onError: (error) => setResult(error instanceof Error ? `${t("manage.syncFailed")}: ${error.message}` : t("manage.syncFailed"))
+  });
+  const addModel = () => {
+    const model = customModel.trim();
+    if (!model) return;
+    updateProvider.mutate({
+      models: Array.from(new Set([...provider.models, model])),
+      activeModel: model
+    });
+    setCustomModel("");
+  };
+  return (
+    <div className="provider-catalog-row">
+      <div className="provider-catalog-main">
+        <strong>{provider.name}</strong>
+        <span>{provider.enabled ? t("manage.enabled") : t("manage.disabled")} · {allowed ? t("manage.policyAllowed") : t("manage.blocked")} · {t("manage.modelsEnabled", { active: enabledCount, total: provider.models.length })}</span>
+        <code>{provider.credentialRef}</code>
+      </div>
+      <Label>
+        {t("manage.activeModel")}
+        <Select value={provider.activeModel} onChange={(event) => updateProvider.mutate({ activeModel: event.target.value })}>
+          {provider.models.map((model) => <option key={model} value={model}>{model}</option>)}
+        </Select>
+      </Label>
+      <div className="model-chip-list">
+        {provider.models.map((model) => (
+          <button
+            key={model}
+            type="button"
+            className={model === provider.activeModel ? "model-chip active" : "model-chip"}
+            onClick={() => updateProvider.mutate({ activeModel: model })}
+          >
+            {model}
+          </button>
+        ))}
+      </div>
+      <div className="provider-catalog-actions">
+        <Button type="button" variant="secondary" onClick={() => updateProvider.mutate({ enabled: !provider.enabled })} disabled={updateProvider.isPending}>
+          {provider.enabled ? t("manage.disable") : t("manage.enable")}
+        </Button>
+        <Button type="button" variant="secondary" onClick={() => syncModels.mutate()} disabled={syncModels.isPending}>{syncModels.isPending ? t("manage.syncing") : t("manage.syncModels")}</Button>
+        <span className={syncModels.isError ? "provider-sync-status error" : "provider-sync-status"} role="status" aria-live="polite">
+          {syncModels.isPending ? t("manage.syncing") : result || t("manage.syncIdle")}
+        </span>
+      </div>
+      <div className="provider-add-model">
+        <Input value={customModel} placeholder={t("manage.customModelPlaceholder")} onChange={(event) => setCustomModel(event.target.value)} />
+        <Button type="button" variant="secondary" onClick={addModel} disabled={updateProvider.isPending}>{t("manage.addModel")}</Button>
+      </div>
+    </div>
+  );
+}
+
+function ModelTestPanel({ providers }: { providers: ManagedProvider[] }) {
+  const { t } = useTranslation();
+  const [providerId, setProviderId] = useState(providers[0]?.id || "");
+  const activeProvider = providers.find((provider) => provider.id === providerId) || providers[0];
+  const [model, setModel] = useState(activeProvider?.activeModel || "");
+  const [customModel, setCustomModel] = useState("");
+  const [prompt, setPrompt] = useState(t("manage.defaultTestPrompt"));
+  const [maxTokens, setMaxTokens] = useState(96);
+  const [result, setResult] = useState("");
+
+  useEffect(() => {
+    if (activeProvider) setModel(activeProvider.activeModel || activeProvider.models[0] || "");
+  }, [activeProvider?.id]);
+
+  const testModel = useMutation({
+    mutationFn: () => apiPost(`/api/providers/${activeProvider?.id}/models/test`, {
+      model: customModel.trim() || model,
+      prompt,
+      maxTokens
+    }),
+    onSuccess: (payload) => setResult(JSON.stringify(payload, null, 2)),
+    onError: (error) => setResult(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : t("manage.testFailed") }, null, 2))
+  });
+
+  if (!activeProvider) return <div className="empty">{t("manage.noProviders")}</div>;
+  return (
+    <div className="model-test-panel">
+      <Label>
+        {t("manage.provider")}
+        <Select value={activeProvider.id} onChange={(event) => {
+          setProviderId(event.target.value);
+          setCustomModel("");
+        }}>
+          {providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
+        </Select>
+      </Label>
+      <Label>
+        {t("manage.model")}
+        <Select value={model} onChange={(event) => setModel(event.target.value)}>
+          {activeProvider.models.map((candidate) => <option key={candidate} value={candidate}>{candidate}</option>)}
+        </Select>
+      </Label>
+      <Label>
+        {t("manage.customModel")}
+        <Input value={customModel} placeholder={t("manage.customModelPlaceholder")} onChange={(event) => setCustomModel(event.target.value)} />
+      </Label>
+      <Label>
+        {t("manage.maxTokens")}
+        <Input type="number" min="16" max="512" value={maxTokens} onChange={(event) => setMaxTokens(Number(event.target.value))} />
+      </Label>
+      <Label className="model-test-prompt">
+        {t("manage.prompt")}
+        <Textarea rows={4} value={prompt} onChange={(event) => setPrompt(event.target.value)} />
+      </Label>
+      <Button type="button" onClick={() => testModel.mutate()} disabled={testModel.isPending}>{testModel.isPending ? t("manage.testing") : t("manage.runModelTest")}</Button>
+      {result ? <pre className="summary compact">{result}</pre> : null}
     </div>
   );
 }
@@ -861,36 +1406,6 @@ function SkillCard({ skill }: { skill: ManagementConfig["skills"][number] }) {
       {result ? <small>{result}</small> : null}
       </CardContent>
     </Card>
-  );
-}
-
-function ProviderRow({ provider, allowed }: { provider: ManagementConfig["providers"][number]; allowed: boolean }) {
-  const { t } = useTranslation();
-  const queryClient = useQueryClient();
-  const [result, setResult] = useState("");
-  const toggleProvider = useMutation({
-    mutationFn: () => apiPatch(`/api/providers/${provider.id}`, { enabled: !provider.enabled }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["config"] });
-      setResult(!provider.enabled ? t("manage.enabled") : t("manage.disabled"));
-    }
-  });
-  return (
-    <div className="provider-row">
-      <strong>{provider.name}</strong>
-      <span>{provider.enabled ? t("manage.enabled") : t("manage.disabled")} · {allowed ? t("manage.policyAllowed") : t("manage.blocked")}</span>
-      <span>{provider.activeModel}</span>
-      <code>{provider.credentialRef}</code>
-      <Button type="button" variant="secondary" onClick={() => toggleProvider.mutate()} disabled={toggleProvider.isPending}>
-        {provider.enabled ? t("manage.disable") : t("manage.enable")}
-      </Button>
-      <Button type="button" variant="secondary" onClick={async () => {
-        setResult(t("manage.testing"));
-        const payload = await apiPost(`/api/providers/${provider.id}/test`, {}).catch((error) => ({ detail: error.message }));
-        setResult(payload.ready ? t("manage.ready", { model: payload.activeModel }) : t("manage.notReady", { detail: payload.detail || payload.error }));
-      }}>{t("manage.test")}</Button>
-      {result ? <small className="provider-test-result">{result}</small> : null}
-    </div>
   );
 }
 
@@ -981,4 +1496,35 @@ function fallbackContextBlocks() {
     { type: "tool_descriptions", tokens: 64, source: "search.web" },
     { type: "retrieval_evidence", tokens: 420, source: "selected sources" }
   ];
+}
+
+function parseDraftDefinition(value: string): Record<string, any> | undefined {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeBuilderDefinition(definition: Record<string, any>) {
+  const steps = Array.isArray(definition.steps) ? definition.steps.filter((step: any) => step?.id && step?.type) : [];
+  return {
+    ...definition,
+    steps,
+    edges: steps.slice(0, -1).map((step: any, index: number) => ({ from: step.id, to: steps[index + 1].id })),
+    artifacts: Array.isArray(definition.artifacts) ? definition.artifacts.filter((artifact: any) => artifact?.id && artifact?.type) : []
+  };
+}
+
+function sanitizeUiId(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "").slice(0, 64);
+}
+
+function createUniqueBuilderId(base: string, existingIds: string[]) {
+  const cleanBase = sanitizeUiId(base) || "step";
+  if (!existingIds.includes(cleanBase)) return cleanBase;
+  let index = 2;
+  while (existingIds.includes(`${cleanBase}_${index}`)) index += 1;
+  return `${cleanBase}_${index}`;
 }

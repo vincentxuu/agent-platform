@@ -12,13 +12,16 @@ import {
   DEFAULT_ALLOWED_PROVIDER_IDS,
   createProviderConfigs,
   createProviderReadiness,
-  createProviderReadinessChecks
+  createProviderReadinessChecks,
+  fetchProviderModelIds,
+  getProviderCatalogEntry
 } from "../../../packages/runtime/src/provider-catalog.js";
 import { DeepResearchWorkflow } from "./workflow.js";
 
 export { DeepResearchWorkflow, RunCoordinator };
 
 const app = new Hono();
+const MANAGEMENT_CONFIG_DB_KEY = "management";
 
 app.onError((error) => {
   if (error instanceof Response) return error;
@@ -95,7 +98,7 @@ app.post("/api/flows/:flowId/runs", async (c) => {
   return c.json(result, 202);
 });
 
-app.get("/api/readiness", (c) => c.json(createReadinessReport(c.env)));
+app.get("/api/readiness", async (c) => c.json(await createReadinessReport(c.env)));
 
 app.get("/api/config", async (c) => {
   requireCloudflareBindings(c.env);
@@ -120,7 +123,7 @@ app.get("/api/skills", async (c) => {
 app.get("/api/providers", async (c) => {
   requireCloudflareBindings(c.env);
   const config = await loadManagementConfig(c.env);
-  return c.json({ providers: config.providers });
+  return c.json({ providers: createPublicManagementConfig(config, c.env).providers });
 });
 
 app.get("/api/policies", async (c) => {
@@ -207,6 +210,30 @@ app.post("/api/skills/:skillId/evals", async (c) => {
 app.post("/api/providers/:providerId/test", async (c) => {
   requireCloudflareBindings(c.env);
   const result = await testProvider(c.env, c.req.param("providerId"));
+  return c.json(result, result.status);
+});
+
+app.post("/api/providers/:providerId/models/sync", async (c) => {
+  requireCloudflareBindings(c.env);
+  const result = await syncProviderModels(c.env, c.req.param("providerId"));
+  return c.json(result.provider ? result : { error: result.error }, result.status);
+});
+
+app.post("/api/providers/:providerId/credential", async (c) => {
+  requireCloudflareBindings(c.env);
+  const result = await updateProviderCredential(c.env, c.req.param("providerId"), await c.req.json().catch(() => ({})));
+  return c.json(result.credential ? result : { error: result.error }, result.status);
+});
+
+app.delete("/api/providers/:providerId/credential", async (c) => {
+  requireCloudflareBindings(c.env);
+  const result = await deleteProviderCredential(c.env, c.req.param("providerId"));
+  return c.json(result.credential ? result : { error: result.error }, result.status);
+});
+
+app.post("/api/providers/:providerId/models/test", async (c) => {
+  requireCloudflareBindings(c.env);
+  const result = await testProviderModel(c.env, c.req.param("providerId"), await c.req.json().catch(() => ({})));
   return c.json(result, result.status);
 });
 
@@ -429,7 +456,7 @@ function validateCloudflareRunRequest(body) {
   return { errors };
 }
 
-function createReadinessReport(env) {
+async function createReadinessReport(env) {
   const bindingChecks = [
     bindingCheck(env, "DB", "D1"),
     bindingCheck(env, "CACHE", "KV"),
@@ -441,7 +468,19 @@ function createReadinessReport(env) {
     bindingCheck(env, "ASSETS", "Workers Assets"),
     bindingCheck(env, "AI", "Workers AI")
   ];
-  const providerChecks = createProviderReadinessChecks(env);
+  const config = await loadManagementConfig(env);
+  const providerChecks = createProviderReadinessChecks(env).map((check) => {
+    const provider = config.providers.find((candidate) => candidate.id === check.id);
+    if (!provider) return check;
+    const source = providerCredentialSource(config, env, provider);
+    return {
+      ...check,
+      ready: Boolean(check.ready || source),
+      detail: source === "config"
+        ? `${provider.name} API key is configured in D1 config.`
+        : check.detail
+    };
+  });
 
   return {
     runtime: "cloudflare",
@@ -467,14 +506,14 @@ function createReadinessReport(env) {
 
 async function createConfigReport(env) {
   return {
-    config: await loadManagementConfig(env),
+    config: createPublicManagementConfig(await loadManagementConfig(env), env),
     operationFlow: createOperationFlow(),
     editableSurfaces: [
       { id: "run_inputs", label: "執行輸入", editable: true, detail: "主題、讀者、新鮮度、策略可在執行前調整。" },
-      { id: "flow_defaults", label: "流程預設", editable: true, detail: "預設策略、讀者、新鮮度可在管理區儲存到 KV。" },
+      { id: "flow_defaults", label: "流程預設", editable: true, detail: "預設策略、讀者、新鮮度可透過 config CRUD 儲存到 D1。" },
       { id: "providers", label: "Provider 啟用狀態", editable: true, detail: "可調整 Provider 啟用狀態與 credential reference；secret 本身仍透過 Cloudflare 設定。" },
       { id: "policy", label: "政策", editable: true, detail: "可調整成本上限、迭代上限、citation requirement 與允許 provider。" },
-      { id: "skills", label: "技能版本", editable: true, detail: "可啟用/停用 skill、切換 active version，並新增草稿 skill 到 KV 管理設定。" },
+      { id: "skills", label: "技能版本", editable: true, detail: "可啟用/停用 skill、切換 active version，並新增草稿 skill 到 D1 管理設定。" },
       { id: "artifact_versions", label: "產物版本", editable: true, detail: "可編輯 artifact、建立版本、查看最近兩版差異，並下載目前版本。" }
     ]
   };
@@ -502,17 +541,42 @@ function createOperationFlow() {
 }
 
 async function loadManagementConfig(env) {
-  const stored = await env.CACHE.get("agent-platform:management-config", "json").catch(() => null);
+  const stored = await loadManagementConfigFromDb(env);
   return normalizeManagementConfig(stored || {}, env);
 }
 
 async function updateManagementConfig(env, body) {
-  const next = normalizeManagementConfig(body, env);
+  const current = await loadManagementConfig(env);
+  const next = normalizeManagementConfig({ ...current, ...body, providerCredentials: body.providerCredentials ?? current.providerCredentials }, env);
   const errors = validateManagementConfig(next);
   if (errors.length === 0) {
-    await env.CACHE.put("agent-platform:management-config", JSON.stringify(next));
+    await saveManagementConfig(env, next);
   }
   return { errors };
+}
+
+async function loadManagementConfigFromDb(env) {
+  try {
+    const row = await env.DB.prepare("SELECT value_json FROM app_config WHERE key = ?")
+      .bind(MANAGEMENT_CONFIG_DB_KEY)
+      .first();
+    return row?.value_json ? JSON.parse(row.value_json) : null;
+  } catch (error) {
+    if (isMissingAppConfigTable(error)) return null;
+    throw error;
+  }
+}
+
+async function saveManagementConfig(env, config) {
+  await env.DB.prepare([
+    "INSERT INTO app_config (key, value_json, updated_at)",
+    "VALUES (?, ?, CURRENT_TIMESTAMP)",
+    "ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = CURRENT_TIMESTAMP"
+  ].join(" ")).bind(MANAGEMENT_CONFIG_DB_KEY, JSON.stringify(config)).run();
+}
+
+function isMissingAppConfigTable(error) {
+  return /no such table: app_config/i.test(String(error?.message || error));
 }
 
 function defaultManagementConfig(env) {
@@ -532,6 +596,7 @@ function defaultManagementConfig(env) {
     },
     policies: [defaultManagedPolicy()],
     improvementProposals: [],
+    providerCredentials: {},
     providers: createProviderConfigs(env),
     skills: builtInSkills()
   };
@@ -573,9 +638,45 @@ function normalizeManagementConfig(input, env) {
     },
     policies: normalizeManagedPolicies(input.policies, fallback.policies, [...providerById.keys()]),
     improvementProposals: normalizeImprovementProposals(input.improvementProposals),
+    providerCredentials: normalizeProviderCredentials(input.providerCredentials, fallback.providerCredentials, [...providerById.keys()]),
     providers: [...providerById.values()],
     skills: [...skillById.values()]
   };
+}
+
+function createPublicManagementConfig(config, env) {
+  return {
+    ...config,
+    providerCredentials: undefined,
+    providers: config.providers.map((provider) => {
+      const source = providerCredentialSource(config, env, provider);
+      return {
+        ...provider,
+        credentialConfigured: Boolean(source),
+        credentialSource: source || "missing"
+      };
+    })
+  };
+}
+
+function normalizeProviderCredentials(input, fallback = {}, providerIds = []) {
+  const source = isRecord(input) ? input : fallback || {};
+  const byProvider = {};
+  for (const [rawProviderId, rawCredential] of Object.entries(source)) {
+    const providerId = sanitizeProviderId(rawProviderId);
+    if (!providerId || !providerIds.includes(providerId) || !isRecord(rawCredential)) continue;
+    const credentialRef = typeof rawCredential.credentialRef === "string"
+      ? rawCredential.credentialRef.slice(0, 120)
+      : "";
+    const value = typeof rawCredential.value === "string" ? rawCredential.value : "";
+    if (!credentialRef || !value) continue;
+    byProvider[providerId] = {
+      credentialRef,
+      value,
+      updatedAt: typeof rawCredential.updatedAt === "string" ? rawCredential.updatedAt : new Date().toISOString()
+    };
+  }
+  return byProvider;
 }
 
 function defaultManagedPolicy() {
@@ -635,7 +736,7 @@ async function createManagedPolicy(env, body) {
   if (!policy) return { status: 400, error: "Policy id is required" };
   if (config.policies.some((candidate) => candidate.id === policy.id)) return { status: 409, error: "Policy already exists" };
   const next = normalizeManagementConfig({ ...config, policies: [...config.policies, policy] }, env);
-  await env.CACHE.put("agent-platform:management-config", JSON.stringify(next));
+  await saveManagementConfig(env, next);
   return { status: 201, policy, policies: next.policies };
 }
 
@@ -647,7 +748,7 @@ async function updateManagedPolicy(env, policyId, body) {
   const policy = normalizeManagedPolicy({ ...existing, ...body, id, status: "draft" }, existing, config.providers.map((provider) => provider.id));
   if (!policy) return { status: 400, error: "Invalid policy request" };
   const next = normalizeManagementConfig({ ...config, policies: config.policies.map((candidate) => candidate.id === id ? policy : candidate) }, env);
-  await env.CACHE.put("agent-platform:management-config", JSON.stringify(next));
+  await saveManagementConfig(env, next);
   return { status: 200, policy, policies: next.policies };
 }
 
@@ -664,7 +765,7 @@ async function publishManagedPolicy(env, policyId) {
     versions: [...existing.versions, { version, publishedAt: new Date().toISOString(), config: existing.draft }]
   };
   const next = normalizeManagementConfig({ ...config, policies: config.policies.map((candidate) => candidate.id === id ? policy : candidate) }, env);
-  await env.CACHE.put("agent-platform:management-config", JSON.stringify(next));
+  await saveManagementConfig(env, next);
   return { status: 201, policy, version };
 }
 
@@ -674,7 +775,7 @@ async function applyManagedPolicy(env, policyId) {
   const policy = config.policies.find((candidate) => candidate.id === id && candidate.status !== "archived");
   if (!policy) return { status: 404, error: "Policy not found" };
   const next = normalizeManagementConfig({ ...config, flow: { ...config.flow, policyRef: id }, policy: policy.draft }, env);
-  await env.CACHE.put("agent-platform:management-config", JSON.stringify(next));
+  await saveManagementConfig(env, next);
   return { status: 200, policy, config: next };
 }
 
@@ -685,7 +786,7 @@ async function archiveManagedPolicy(env, policyId) {
   if (!existing) return { status: 404, error: "Policy not found" };
   const policy = { ...existing, status: "archived" };
   const next = normalizeManagementConfig({ ...config, policies: config.policies.map((candidate) => candidate.id === id ? policy : candidate) }, env);
-  await env.CACHE.put("agent-platform:management-config", JSON.stringify(next));
+  await saveManagementConfig(env, next);
   return { status: 200, policy, policies: next.policies };
 }
 
@@ -746,7 +847,7 @@ async function createImprovementProposal(env, body) {
     ...config,
     improvementProposals: [proposal, ...config.improvementProposals].slice(0, 50)
   }, env);
-  await env.CACHE.put("agent-platform:management-config", JSON.stringify(next));
+  await saveManagementConfig(env, next);
   return { status: 201, proposal, proposals: next.improvementProposals };
 }
 
@@ -758,9 +859,9 @@ function normalizeManagedProvider(input, fallback) {
   const id = sanitizeProviderId(input?.id || fallback?.id);
   if (!id) return undefined;
   const models = Array.isArray(input?.models) && input.models.length > 0
-    ? input.models.map(String).filter(Boolean).slice(0, 12)
+    ? input.models.map(String).filter(Boolean).slice(0, 200)
     : fallback?.models || [typeof input?.activeModel === "string" ? input.activeModel : "default"];
-  const activeModel = typeof input?.activeModel === "string" ? input.activeModel.slice(0, 80) : fallback?.activeModel || models[0];
+  const activeModel = typeof input?.activeModel === "string" ? input.activeModel.slice(0, 160) : fallback?.activeModel || models[0];
   return {
     id,
     name: typeof input?.name === "string" ? input.name.slice(0, 80) : fallback?.name || id,
@@ -771,6 +872,112 @@ function normalizeManagedProvider(input, fallback) {
   };
 }
 
+async function syncProviderModels(env, providerId) {
+  const config = await loadManagementConfig(env);
+  const id = sanitizeProviderId(providerId);
+  const existing = config.providers.find((provider) => provider.id === id);
+  if (!existing) return { status: 404, error: "Provider not found" };
+  const catalogEntry = getProviderCatalogEntry(id);
+  if (!catalogEntry) return { status: 404, error: "No sync catalog is available for this provider" };
+
+  const before = new Set(existing.models);
+  let liveModels = [];
+  try {
+    liveModels = await fetchProviderModelIds(
+      id,
+      (secretName, provider) => env[secretName] || providerSecret(env, config, provider || id) || "",
+      {
+        cloudflareAccountId: env.CLOUDFLARE_ACCOUNT_ID,
+        cloudflareApiToken: env.CLOUDFLARE_API_TOKEN,
+        ollamaBaseUrl: env.OLLAMA_API_BASE || env.OLLAMA_HOST || env.OLLAMA_URL
+      }
+    );
+  } catch (error) {
+    return {
+      status: 502,
+      error: error instanceof Error ? error.message : "Provider model sync failed",
+      provider: id
+    };
+  }
+  const models = Array.from(new Set([...existing.models, ...liveModels, ...catalogEntry.models])).filter(Boolean).sort();
+  const provider = normalizeManagedProvider({
+    ...existing,
+    name: existing.name || catalogEntry.name,
+    credentialRef: existing.credentialRef || catalogEntry.credentialRefs.join(" or "),
+    models,
+    activeModel: models.includes(existing.activeModel) ? existing.activeModel : catalogEntry.activeModel
+  }, existing);
+  const next = normalizeManagementConfig({
+    ...config,
+    providers: config.providers.map((candidate) => candidate.id === id ? provider : candidate)
+  }, env);
+  await saveManagementConfig(env, next);
+  return {
+    status: 200,
+    provider: createPublicProvider(next, env, provider.id),
+    added: models.filter((model) => !before.has(model)).length,
+    existing: models.filter((model) => before.has(model)).length,
+    total: models.length,
+    source: liveModels.length > 0 ? "provider-api" : "catalog"
+  };
+}
+
+async function updateProviderCredential(env, providerId, body) {
+  const config = await loadManagementConfig(env);
+  const id = sanitizeProviderId(providerId);
+  const existing = config.providers.find((provider) => provider.id === id);
+  if (!existing) return { status: 404, error: "Provider not found" };
+  const secretRefs = extractCredentialRefs(existing);
+  const requestedRef = typeof body.credentialRef === "string" ? body.credentialRef.trim().slice(0, 120) : "";
+  const credentialRef = requestedRef || secretRefs[0] || existing.credentialRef;
+  const value = typeof body.value === "string" ? body.value.trim() : "";
+  if (!credentialRef) return { status: 400, error: "credentialRef is required" };
+  if (!value) return { status: 400, error: "API key value is required" };
+  const next = normalizeManagementConfig({
+    ...config,
+    providerCredentials: {
+      ...(config.providerCredentials || {}),
+      [id]: {
+        credentialRef,
+        value,
+        updatedAt: new Date().toISOString()
+      }
+    }
+  }, env);
+  await saveManagementConfig(env, next);
+  return {
+    status: 200,
+    provider: createPublicProvider(next, env, id),
+    credential: {
+      providerId: id,
+      credentialRef,
+      configured: true
+    }
+  };
+}
+
+async function deleteProviderCredential(env, providerId) {
+  const config = await loadManagementConfig(env);
+  const id = sanitizeProviderId(providerId);
+  if (!config.providers.some((provider) => provider.id === id)) return { status: 404, error: "Provider not found" };
+  const providerCredentials = { ...(config.providerCredentials || {}) };
+  delete providerCredentials[id];
+  const next = normalizeManagementConfig({ ...config, providerCredentials }, env);
+  await saveManagementConfig(env, next);
+  return {
+    status: 200,
+    provider: createPublicProvider(next, env, id),
+    credential: {
+      providerId: id,
+      configured: false
+    }
+  };
+}
+
+function createPublicProvider(config, env, providerId) {
+  return createPublicManagementConfig(config, env).providers.find((provider) => provider.id === providerId);
+}
+
 async function createManagedProvider(env, body) {
   const config = await loadManagementConfig(env);
   const provider = normalizeManagedProvider({ ...body, enabled: body.enabled ?? false });
@@ -779,8 +986,8 @@ async function createManagedProvider(env, body) {
     return { status: 409, error: "Provider already exists" };
   }
   const next = normalizeManagementConfig({ ...config, providers: [...config.providers, provider] }, env);
-  await env.CACHE.put("agent-platform:management-config", JSON.stringify(next));
-  return { status: 201, provider, providers: next.providers };
+  await saveManagementConfig(env, next);
+  return { status: 201, provider: createPublicProvider(next, env, provider.id), providers: createPublicManagementConfig(next, env).providers };
 }
 
 async function updateManagedProvider(env, providerId, body) {
@@ -794,13 +1001,27 @@ async function updateManagedProvider(env, providerId, body) {
     ...config,
     providers: config.providers.map((candidate) => candidate.id === id ? provider : candidate)
   }, env);
-  await env.CACHE.put("agent-platform:management-config", JSON.stringify(next));
-  return { status: 200, provider, providers: next.providers };
+  await saveManagementConfig(env, next);
+  return { status: 200, provider: createPublicProvider(next, env, provider.id), providers: createPublicManagementConfig(next, env).providers };
 }
 
 function sanitizeProviderId(value) {
   if (typeof value !== "string") return "";
   return value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+}
+
+function extractCredentialRefs(provider) {
+  return String(provider?.credentialRef || "")
+    .split(/\s+or\s+| 或 |,\s*/)
+    .map((item) => item.trim())
+    .filter((item) => /^[A-Z0-9_]+$/.test(item));
+}
+
+function providerCredentialSource(config, env, provider) {
+  if (provider.id === "workers_ai" && env.AI) return "binding";
+  const stored = config.providerCredentials?.[provider.id];
+  if (stored?.value) return "config";
+  return extractCredentialRefs(provider).some((key) => Boolean(env[key])) ? "env" : "";
 }
 
 function validateManagementConfig(config) {
@@ -913,10 +1134,10 @@ async function createManagedSkill(env, body) {
     source: "draft"
   });
   if (!skill) return badRequest("Invalid skill request");
-  await env.CACHE.put("agent-platform:management-config", JSON.stringify(normalizeManagementConfig({
+  await saveManagementConfig(env, normalizeManagementConfig({
     ...config,
     skills: [...config.skills, skill]
-  }, env)));
+  }, env));
   return { skill, skills: (await loadManagementConfig(env)).skills };
 }
 
@@ -935,10 +1156,10 @@ async function updateManagedSkill(env, skillId, body) {
     availableVersions: versions
   }, existing);
   if (!next) return badRequest("Invalid skill request");
-  await env.CACHE.put("agent-platform:management-config", JSON.stringify(normalizeManagementConfig({
+  await saveManagementConfig(env, normalizeManagementConfig({
     ...config,
     skills: config.skills.map((skill) => skill.id === id ? next : skill)
-  }, env)));
+  }, env));
   return { skill: next, skills: (await loadManagementConfig(env)).skills };
 }
 
@@ -999,8 +1220,8 @@ async function testProvider(env, id) {
   const provider = config.providers.find((candidate) => candidate.id === id);
   if (!provider) return { status: 404, error: "Provider not found" };
   const allowed = config.policy.allowedProviders.includes(provider.id);
-  const readiness = createProviderReadiness(env);
-  const ready = Boolean(provider.enabled && allowed && readiness[provider.id]);
+  const credentialSource = providerCredentialSource(config, env, provider);
+  const ready = Boolean(provider.enabled && allowed && credentialSource);
   return {
     status: ready ? 200 : 412,
     id: provider.id,
@@ -1010,10 +1231,156 @@ async function testProvider(env, id) {
     allowed,
     activeModel: provider.activeModel,
     credentialRef: provider.credentialRef,
+    credentialConfigured: Boolean(credentialSource),
+    credentialSource: credentialSource || "missing",
     detail: ready
       ? `${provider.name} is ready with ${provider.activeModel}.`
-      : `${provider.name} needs enabled=true, Policy allowed=true, and its credential/binding configured.`
+      : `${provider.name} needs enabled=true, Policy allowed=true, and an API key in config or env.`
   };
+}
+
+async function testProviderModel(env, id, body) {
+  const config = await loadManagementConfig(env);
+  const provider = config.providers.find((candidate) => candidate.id === sanitizeProviderId(id));
+  if (!provider) return { status: 404, error: "Provider not found" };
+  const model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : provider.activeModel;
+  if (!model) return { status: 400, error: "Model is required" };
+
+  const base = await testProvider(env, provider.id);
+  if (!base.ready) return { ...base, status: 412, model, error: base.detail };
+
+  const prompt = typeof body.prompt === "string" && body.prompt.trim()
+    ? body.prompt.trim().slice(0, 1000)
+    : "Reply in one short sentence confirming this model connection works.";
+  const maxTokens = Number.isFinite(Number(body.maxTokens))
+    ? Math.min(Math.max(Math.round(Number(body.maxTokens)), 16), 512)
+    : 96;
+  const started = Date.now();
+
+  try {
+    const content = await invokeProviderModel(env, config, provider.id, model, prompt, maxTokens);
+    return {
+      status: 200,
+      ok: true,
+      provider: provider.id,
+      model,
+      durationMs: Date.now() - started,
+      content
+    };
+  } catch (error) {
+    return {
+      status: 502,
+      ok: false,
+      provider: provider.id,
+      model,
+      durationMs: Date.now() - started,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+async function invokeProviderModel(env, config, providerId, model, prompt, maxTokens) {
+  if (providerId === "workers_ai") {
+    const response = await env.AI.run(model, {
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: maxTokens
+    });
+    return extractModelText(response);
+  }
+
+  if (["openai", "groq", "openrouter", "nvidia", "cerebras", "ollama_cloud", "ollama"].includes(providerId)) {
+    const apiKey = providerSecret(env, config, providerId);
+    const baseUrl = openAiCompatibleBaseUrl(env, providerId);
+    const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {})
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: maxTokens
+      })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error?.message || payload.message || response.statusText);
+    return extractModelText(payload);
+  }
+
+  if (providerId === "anthropic") {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "anthropic-version": "2023-06-01",
+        "x-api-key": providerSecret(env, config, providerId)
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: maxTokens,
+        messages: [{ role: "user", content: prompt }]
+      })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error?.message || payload.message || response.statusText);
+    return extractModelText(payload);
+  }
+
+  if (providerId === "gemini") {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(providerSecret(env, config, providerId))}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: { maxOutputTokens: maxTokens }
+      })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error?.message || payload.message || response.statusText);
+    return extractModelText(payload);
+  }
+
+  return `${providerId} is configured for ${model}. Live invocation is not implemented for this provider type.`;
+}
+
+function providerSecret(env, config, providerId) {
+  const stored = config.providerCredentials?.[providerId]?.value;
+  if (stored) return stored;
+  const keys = {
+    openai: ["OPENAI_API_KEY"],
+    groq: ["GROQ_API_KEY"],
+    openrouter: ["OPENROUTER_API_KEY"],
+    nvidia: ["NVIDIA_API_KEY"],
+    cerebras: ["CEREBRAS_API_KEY"],
+    ollama_cloud: ["OLLAMA_CLOUD_API_KEY", "OLLAMA_API_KEY"],
+    ollama: ["OLLAMA_API_KEY"],
+    anthropic: ["ANTHROPIC_API_KEY"],
+    gemini: ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
+  }[providerId] || [];
+  return keys.map((key) => env[key]).find(Boolean) || "";
+}
+
+function openAiCompatibleBaseUrl(env, providerId) {
+  if (providerId === "openai") return "https://api.openai.com/v1";
+  if (providerId === "groq") return "https://api.groq.com/openai/v1";
+  if (providerId === "openrouter") return "https://openrouter.ai/api/v1";
+  if (providerId === "nvidia") return "https://integrate.api.nvidia.com/v1";
+  if (providerId === "cerebras") return "https://api.cerebras.ai/v1";
+  if (providerId === "ollama_cloud") return "https://ollama.com/v1";
+  const base = env.OLLAMA_API_BASE || env.OLLAMA_HOST || env.OLLAMA_URL || "http://localhost:11434";
+  return String(base).replace(/\/api\/?$/, "").replace(/\/v1\/?$/, "") + "/v1";
+}
+
+function extractModelText(payload) {
+  if (typeof payload === "string") return payload;
+  if (typeof payload?.response === "string") return payload.response;
+  if (typeof payload?.content === "string") return payload.content;
+  if (Array.isArray(payload?.content)) return payload.content.map((part) => part.text || "").filter(Boolean).join("\n");
+  if (typeof payload?.choices?.[0]?.message?.content === "string") return payload.choices[0].message.content;
+  const geminiText = payload?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").filter(Boolean).join("\n");
+  if (geminiText) return geminiText;
+  return JSON.stringify(payload);
 }
 
 async function getCloudflareRun(env, runId, request) {

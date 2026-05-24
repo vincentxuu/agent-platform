@@ -7,7 +7,9 @@ import { InMemoryFlowRuntime } from "../packages/runtime/src/flow-runtime.js";
 import {
   DEFAULT_ALLOWED_PROVIDER_IDS,
   createProviderConfigs,
-  createProviderReadiness
+  createProviderReadiness,
+  fetchProviderModelIds,
+  getProviderCatalogEntry
 } from "../packages/runtime/src/provider-catalog.js";
 import {
   createLocalHealthReport,
@@ -45,7 +47,7 @@ type LocalRunView = {
   createdAt: string;
   updatedAt: string;
   timeline: Array<{ stepId: string; status: string; attempt: number }>;
-  evidence: Array<{ claim: string; source: string; sourceTitle: string; sourceUrl: string; excerpt: string; confidence: string; conflicts: string; review?: EvidenceReview }>;
+  evidence: Array<{ claim: string; source: string; sourceTitle: string; sourceUrl: string; alphaXivUrl?: string; arxivId?: string; excerpt: string; confidence: string; conflicts: string; review?: EvidenceReview }>;
   artifacts: Array<LocalArtifact>;
   detail: JsonRecord;
 };
@@ -77,6 +79,8 @@ type LocalResearchSource = {
   id: string;
   title: string;
   url: string;
+  alphaXivUrl?: string;
+  arxivId?: string;
   provider: string;
   freshnessDays: number;
   excerpt: string;
@@ -100,11 +104,14 @@ type ManagementConfig = {
   };
   policies: ManagedPolicy[];
   improvementProposals: ManagedImprovementProposal[];
+  providerCredentials: Record<string, { credentialRef: string; value: string; updatedAt: string }>;
   providers: Array<{
     id: string;
     name: string;
     enabled: boolean;
     credentialRef: string;
+    credentialConfigured?: boolean;
+    credentialSource?: string;
     models: string[];
     activeModel: string;
   }>;
@@ -371,6 +378,34 @@ const server = createServer(async (request, response) => {
       return sendJson(response, result, result.status);
     }
 
+    const providerSyncMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/models\/sync$/);
+    if (providerSyncMatch && request.method === "POST") {
+      const result = await syncProviderModels(providerSyncMatch[1]);
+      if (!result.provider) return sendJson(response, { error: result.error }, result.status);
+      return sendJson(response, result, result.status);
+    }
+
+    const providerCredentialMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/credential$/);
+    if (providerCredentialMatch && request.method === "POST") {
+      const body = await readJson(request);
+      const result = updateProviderCredential(providerCredentialMatch[1], body);
+      if (!result.credential) return sendJson(response, { error: result.error }, result.status);
+      return sendJson(response, result);
+    }
+
+    if (providerCredentialMatch && request.method === "DELETE") {
+      const result = deleteProviderCredential(providerCredentialMatch[1]);
+      if (!result.credential) return sendJson(response, { error: result.error }, result.status);
+      return sendJson(response, result);
+    }
+
+    const providerModelTestMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/models\/test$/);
+    if (providerModelTestMatch && request.method === "POST") {
+      const body = await readJson(request);
+      const result = testProviderModel(providerModelTestMatch[1], body);
+      return sendJson(response, result, result.status);
+    }
+
     if (url.pathname === "/api/runs" && request.method === "GET") {
       return sendJson(response, { runs: [...runViews.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) });
     }
@@ -492,8 +527,10 @@ function getFlowDetail(flowId: string) {
 }
 
 function createFlowDraft(body: JsonRecord) {
+  const requestedDefinition = typeof body.definition === "object" && body.definition !== null ? body.definition as JsonRecord : undefined;
+  const template = requestedDefinition || (typeof body.baseFlowId === "string" ? resolveFlowDraftOrVersion(body.baseFlowId) : undefined) || createBlankFlowDefinition(body);
   const base = normalizeFlowDefinition({
-    ...deepResearchFlow,
+    ...template,
     id: sanitizeFlowId(typeof body.id === "string" ? body.id : typeof body.name === "string" ? body.name : "custom_flow"),
     name: typeof body.name === "string" && body.name.trim() ? body.name.trim().slice(0, 100) : "Custom Flow",
     description: typeof body.description === "string" ? body.description.slice(0, 300) : "Custom workflow draft.",
@@ -655,6 +692,29 @@ function normalizeFlowDefinition(input: any): FlowDefinition {
   } as FlowDefinition;
 }
 
+function createBlankFlowDefinition(body: JsonRecord) {
+  const id = sanitizeFlowId(typeof body.id === "string" ? body.id : typeof body.name === "string" ? body.name : "custom_flow");
+  return {
+    id,
+    name: typeof body.name === "string" && body.name.trim() ? body.name.trim().slice(0, 100) : "Custom Flow",
+    version: 0,
+    description: typeof body.description === "string" ? body.description.slice(0, 300) : "User-authored workflow draft.",
+    inputs: [
+      { id: "topic", type: "string", required: true },
+      { id: "audience", type: "string", required: false },
+      { id: "freshness_days", type: "number", required: false, default: 365 }
+    ],
+    presets: [
+      { id: "quick", name: "Quick", policy: { max_cost_usd: 1, max_iterations: 2, citation_required: true } },
+      { id: "standard", name: "Standard", policy: { max_cost_usd: 3, max_iterations: 4, citation_required: true } },
+      { id: "deep", name: "Deep", policy: { max_cost_usd: 8, max_iterations: 6, citation_required: true } }
+    ],
+    steps: [],
+    edges: [],
+    artifacts: []
+  };
+}
+
 function validateDraft(flow: FlowDefinition) {
   return validateFlowDefinition({ ...flow, version: Number.isInteger(flow.version) && flow.version > 0 ? flow.version : 1 });
 }
@@ -666,14 +726,16 @@ function sanitizeFlowId(value: unknown) {
 
 function loadFlowStore() {
   const now = new Date().toISOString();
-  flowRecords.set(deepResearchFlow.id, {
-    id: deepResearchFlow.id,
-    status: "seed",
-    source: "built-in",
-    versions: [{ version: deepResearchFlow.version, flow: deepResearchFlow, publishedAt: now }],
-    createdAt: now,
-    updatedAt: now
-  });
+  for (const flow of [deepResearchFlow]) {
+    flowRecords.set(flow.id, {
+      id: flow.id,
+      status: "seed",
+      source: "built-in",
+      versions: [{ version: flow.version, flow, publishedAt: now }],
+      createdAt: now,
+      updatedAt: now
+    });
+  }
   if (!existsSync(flowStorePath)) return;
   try {
     const stored = JSON.parse(readFileSync(flowStorePath, "utf8")) as { flows?: LocalFlowRecord[] };
@@ -801,7 +863,7 @@ function createReadinessReport() {
 
 function createConfigReport() {
   return {
-    config: managementConfig,
+    config: createPublicManagementConfig(),
     operationFlow: createOperationFlow(),
     editableSurfaces: [
       { id: "run_inputs", label: "執行輸入", editable: true, detail: "主題、讀者、新鮮度、策略可在執行前調整。" },
@@ -811,6 +873,14 @@ function createConfigReport() {
       { id: "skills", label: "技能版本", editable: true, detail: "可啟用/停用 skill、切換 active version，並新增草稿 skill 到管理設定。" },
       { id: "artifact_versions", label: "產物版本", editable: true, detail: "可編輯 artifact、建立版本、查看最近兩版差異，並下載目前版本。" }
     ]
+  };
+}
+
+function createPublicManagementConfig() {
+  return {
+    ...managementConfig,
+    providerCredentials: undefined,
+    providers: managementConfig.providers.map(withCredentialStatus)
   };
 }
 
@@ -852,6 +922,7 @@ function defaultManagementConfig(): ManagementConfig {
     },
     policies: [defaultManagedPolicy()],
     improvementProposals: [],
+    providerCredentials: {},
     providers: createProviderConfigs(process.env, { localWorkersAiReady: true }),
     skills: builtInSkills()
   };
@@ -868,7 +939,11 @@ function loadManagementConfig(): ManagementConfig {
 }
 
 function updateManagementConfig(body: JsonRecord) {
-  const next = normalizeManagementConfig(body as Partial<ManagementConfig>);
+  const next = normalizeManagementConfig({
+    ...managementConfig,
+    ...(body as Partial<ManagementConfig>),
+    providerCredentials: (body as Partial<ManagementConfig>).providerCredentials ?? managementConfig.providerCredentials
+  });
   const errors = validateManagementConfig(next);
   if (errors.length === 0) {
     managementConfig = next;
@@ -913,9 +988,32 @@ function normalizeManagementConfig(input: Partial<ManagementConfig>): Management
     },
     policies: normalizeManagedPolicies(input.policies, fallback.policies, [...providerById.keys()]),
     improvementProposals: normalizeImprovementProposals(input.improvementProposals),
+    providerCredentials: normalizeProviderCredentials(input.providerCredentials, fallback.providerCredentials, [...providerById.keys()]),
     providers: [...providerById.values()],
     skills: [...skillById.values()]
   };
+}
+
+function normalizeProviderCredentials(
+  input: Partial<ManagementConfig>["providerCredentials"],
+  fallback: ManagementConfig["providerCredentials"] = {},
+  providerIds: string[] = []
+) {
+  const source = input && typeof input === "object" ? input : fallback || {};
+  const byProvider: ManagementConfig["providerCredentials"] = {};
+  for (const [rawProviderId, rawCredential] of Object.entries(source)) {
+    const providerId = sanitizeProviderId(rawProviderId);
+    if (!providerId || !providerIds.includes(providerId) || !rawCredential) continue;
+    const credentialRef = typeof rawCredential.credentialRef === "string" ? rawCredential.credentialRef.slice(0, 120) : "";
+    const value = typeof rawCredential.value === "string" ? rawCredential.value : "";
+    if (!credentialRef || !value) continue;
+    byProvider[providerId] = {
+      credentialRef,
+      value,
+      updatedAt: typeof rawCredential.updatedAt === "string" ? rawCredential.updatedAt : new Date().toISOString()
+    };
+  }
+  return byProvider;
 }
 
 function defaultManagedPolicy(): ManagedPolicy {
@@ -1094,9 +1192,9 @@ function normalizeManagedProvider(input: any, fallback?: ManagementConfig["provi
   const id = sanitizeProviderId(input?.id || fallback?.id);
   if (!id) return undefined;
   const models = Array.isArray(input?.models) && input.models.length > 0
-    ? input.models.map(String).filter(Boolean).slice(0, 12)
+    ? input.models.map(String).filter(Boolean).slice(0, 200)
     : fallback?.models || [typeof input?.activeModel === "string" ? input.activeModel : "default"];
-  const activeModel = typeof input?.activeModel === "string" ? input.activeModel.slice(0, 80) : fallback?.activeModel || models[0];
+  const activeModel = typeof input?.activeModel === "string" ? input.activeModel.slice(0, 160) : fallback?.activeModel || models[0];
   return {
     id,
     name: typeof input?.name === "string" ? input.name.slice(0, 80) : fallback?.name || id,
@@ -1133,6 +1231,138 @@ function updateManagedProvider(providerId: string, body: JsonRecord) {
   });
   persistManagementConfig();
   return { status: 200, provider: next };
+}
+
+async function syncProviderModels(providerId: string) {
+  const id = sanitizeProviderId(providerId);
+  const existing = managementConfig.providers.find((provider) => provider.id === id);
+  if (!existing) return { status: 404, error: "Provider not found" };
+  const catalogEntry = getProviderCatalogEntry(id);
+  if (!catalogEntry) return { status: 404, error: "No sync catalog is available for this provider" };
+
+  const before = new Set(existing.models);
+  let liveModels: string[] = [];
+  try {
+    liveModels = await fetchProviderModelIds(
+      id,
+      (secretName: string, provider: string) => process.env[secretName] || providerSecret(provider || id) || "",
+      {
+        cloudflareAccountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+        cloudflareApiToken: process.env.CLOUDFLARE_API_TOKEN,
+        ollamaBaseUrl: process.env.OLLAMA_API_BASE || process.env.OLLAMA_HOST || process.env.OLLAMA_URL
+      }
+    );
+  } catch (error) {
+    return {
+      status: 502,
+      error: error instanceof Error ? error.message : "Provider model sync failed",
+      provider: id
+    };
+  }
+  const models = Array.from(new Set([...existing.models, ...liveModels, ...catalogEntry.models])).filter(Boolean).sort();
+  const provider = normalizeManagedProvider({
+    ...existing,
+    name: existing.name || catalogEntry.name,
+    credentialRef: existing.credentialRef || catalogEntry.credentialRefs.join(" or "),
+    models,
+    activeModel: models.includes(existing.activeModel) ? existing.activeModel : catalogEntry.activeModel
+  }, existing)!;
+  managementConfig = normalizeManagementConfig({
+    ...managementConfig,
+    providers: managementConfig.providers.map((candidate) => candidate.id === id ? provider : candidate)
+  });
+  persistManagementConfig();
+  return {
+    status: 200,
+    provider,
+    added: models.filter((model) => !before.has(model)).length,
+    existing: models.filter((model) => before.has(model)).length,
+    total: models.length,
+    source: liveModels.length > 0 ? "provider-api" : "catalog"
+  };
+}
+
+function updateProviderCredential(providerId: string, body: JsonRecord) {
+  const id = sanitizeProviderId(providerId);
+  const existing = managementConfig.providers.find((provider) => provider.id === id);
+  if (!existing) return { status: 404, error: "Provider not found" };
+  const refs = extractCredentialRefs(existing);
+  const credentialRef = typeof body.credentialRef === "string" && body.credentialRef.trim()
+    ? body.credentialRef.trim().slice(0, 120)
+    : refs[0] || existing.credentialRef;
+  const value = typeof body.value === "string" ? body.value.trim() : "";
+  if (!credentialRef) return { status: 400, error: "credentialRef is required" };
+  if (!value) return { status: 400, error: "API key value is required" };
+  managementConfig = normalizeManagementConfig({
+    ...managementConfig,
+    providerCredentials: {
+      ...managementConfig.providerCredentials,
+      [id]: { credentialRef, value, updatedAt: new Date().toISOString() }
+    }
+  });
+  persistManagementConfig();
+  return {
+    status: 200,
+    provider: withCredentialStatus(managementConfig.providers.find((provider) => provider.id === id)!),
+    credential: { providerId: id, credentialRef, configured: true }
+  };
+}
+
+function deleteProviderCredential(providerId: string) {
+  const id = sanitizeProviderId(providerId);
+  const existing = managementConfig.providers.find((provider) => provider.id === id);
+  if (!existing) return { status: 404, error: "Provider not found" };
+  const providerCredentials = { ...managementConfig.providerCredentials };
+  delete providerCredentials[id];
+  managementConfig = normalizeManagementConfig({ ...managementConfig, providerCredentials });
+  persistManagementConfig();
+  return {
+    status: 200,
+    provider: withCredentialStatus(managementConfig.providers.find((provider) => provider.id === id)!),
+    credential: { providerId: id, configured: false }
+  };
+}
+
+function extractCredentialRefs(provider: ManagementConfig["providers"][number]) {
+  return String(provider.credentialRef || "")
+    .split(/\s+or\s+| 或 |,\s*/)
+    .map((item) => item.trim())
+    .filter((item) => /^[A-Z0-9_]+$/.test(item));
+}
+
+function providerCredentialSource(provider: ManagementConfig["providers"][number]) {
+  if (provider.id === "workers_ai") return "binding";
+  if (managementConfig.providerCredentials?.[provider.id]?.value) return "config";
+  return extractCredentialRefs(provider).some((key) => Boolean(process.env[key])) ? "env" : "";
+}
+
+function providerSecret(providerId: string) {
+  const stored = managementConfig.providerCredentials?.[providerId]?.value;
+  if (stored) return stored;
+  const keys = {
+    openai: ["OPENAI_API_KEY"],
+    groq: ["GROQ_API_KEY"],
+    openrouter: ["OPENROUTER_API_KEY"],
+    nvidia: ["NVIDIA_API_KEY"],
+    cerebras: ["CEREBRAS_API_KEY"],
+    ollama_cloud: ["OLLAMA_CLOUD_API_KEY", "OLLAMA_API_KEY"],
+    ollama: ["OLLAMA_API_KEY"],
+    anthropic: ["ANTHROPIC_API_KEY"],
+    gemini: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+    google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+    workers_ai: ["CLOUDFLARE_API_TOKEN"],
+    cloudflare: ["CLOUDFLARE_API_TOKEN"]
+  }[providerId] || [];
+  return keys.map((key) => process.env[key]).find(Boolean) || "";
+}
+
+function withCredentialStatus(provider: ManagementConfig["providers"][number]) {
+  const source = providerCredentialSource(provider);
+  return {
+    ...provider,
+    credentialConfigured: Boolean(source),
+    credentialSource: source || "missing"
+  };
 }
 
 function sanitizeProviderId(value: unknown) {
@@ -1334,8 +1564,8 @@ function testProvider(id: string) {
   const provider = managementConfig.providers.find((candidate) => candidate.id === id);
   if (!provider) return { status: 404, error: "Provider not found" };
   const allowed = managementConfig.policy.allowedProviders.includes(provider.id);
-  const readiness = createProviderReadiness(process.env, { localWorkersAiReady: true });
-  const ready = Boolean(provider.enabled && allowed && readiness[provider.id]);
+  const credentialSource = providerCredentialSource(provider);
+  const ready = Boolean(provider.enabled && allowed && credentialSource);
   return {
     status: ready ? 200 : 412,
     id: provider.id,
@@ -1345,9 +1575,31 @@ function testProvider(id: string) {
     allowed,
     activeModel: provider.activeModel,
     credentialRef: provider.credentialRef,
+    credentialConfigured: Boolean(credentialSource),
+    credentialSource: credentialSource || "missing",
     detail: ready
       ? `${provider.name} is ready with ${provider.activeModel}.`
-      : `${provider.name} needs enabled=true, Policy allowed=true, and its credential/binding configured.`
+      : `${provider.name} needs enabled=true, Policy allowed=true, and an API key in config or env.`
+  };
+}
+
+function testProviderModel(id: string, body: JsonRecord) {
+  const provider = managementConfig.providers.find((candidate) => candidate.id === sanitizeProviderId(id));
+  if (!provider) return { status: 404, error: "Provider not found" };
+  const model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : provider.activeModel;
+  if (!model) return { status: 400, error: "Model is required" };
+  const base = testProvider(provider.id);
+  if (!base.ready) return { ...base, status: 412, model, ok: false, error: base.detail };
+  const prompt = typeof body.prompt === "string" && body.prompt.trim()
+    ? body.prompt.trim().slice(0, 1000)
+    : "Reply in one short sentence confirming this model connection works.";
+  return {
+    status: 200,
+    ok: true,
+    provider: provider.id,
+    model,
+    durationMs: 1,
+    content: `Local dev model test accepted for ${provider.name}/${model}. Prompt: ${prompt.slice(0, 120)}`
   };
 }
 
@@ -1399,12 +1651,14 @@ function scheduleLocalProgress(runId: string) {
 
 function createStepDetail(run: LocalRunView, stepId: string): JsonRecord {
   const flow = getFlowForRun(run);
+  const arxiv = isArxivRun(run);
   return {
     runtime: "local-dev",
     runId: run.id,
     step: stepId,
-    providerCalls: ["search", "read_sources"].includes(stepId) ? 1 : 0,
+    providerCalls: ["search", "read_sources", "search_arxiv", "read_papers"].includes(stepId) ? 1 : 0,
     skillInvocation: skillBindingForStep(stepId, flow),
+    functionInfo: functionInfoForStep(stepId, arxiv),
     guardResults: "passed",
     costUsd: Number((0.01 + run.timeline.filter((item) => item.status === "succeeded").length * 0.02).toFixed(2)),
     latencyMs: 250,
@@ -1415,10 +1669,10 @@ function createStepDetail(run: LocalRunView, stepId: string): JsonRecord {
 function createObservabilityReport(run: LocalRunView) {
   const succeededCount = run.timeline.filter((item) => item.status === "succeeded").length;
   const providerCalls = run.timeline
-    .filter((item) => ["search", "read_sources", "synthesize", "verify"].includes(item.stepId) && item.status !== "waiting")
+    .filter((item) => ["search", "read_sources", "synthesize", "verify", "search_arxiv", "read_papers", "layered_summary", "verify_sources"].includes(item.stepId) && item.status !== "waiting")
     .map((item, index) => ({
       id: `provider_${index + 1}`,
-      provider: ["search", "read_sources"].includes(item.stepId) ? "Search/Reader" : "LLM",
+      provider: ["search", "read_sources", "search_arxiv", "read_papers"].includes(item.stepId) ? "Search/Reader" : "LLM",
       stepId: item.stepId,
       status: item.status === "running" ? "running" : "succeeded",
       costUsd: Number((0.01 + index * 0.015).toFixed(3)),
@@ -1427,10 +1681,10 @@ function createObservabilityReport(run: LocalRunView) {
       retryCount: Math.max(0, item.attempt - 1)
     }));
   const toolInvocations = run.timeline
-    .filter((item) => ["search", "read_sources", "extract_evidence"].includes(item.stepId) && item.status !== "waiting")
+    .filter((item) => ["search", "read_sources", "extract_evidence", "search_arxiv", "read_papers", "extract_contributions"].includes(item.stepId) && item.status !== "waiting")
     .map((item, index) => ({
       id: `tool_${index + 1}`,
-      tool: item.stepId === "search" ? "search.web" : item.stepId === "read_sources" ? "reader.fetch" : "citation.extract",
+      tool: ["search", "search_arxiv"].includes(item.stepId) ? "search.arxiv" : ["read_sources", "read_papers"].includes(item.stepId) ? "reader.fetch" : "citation.extract",
       stepId: item.stepId,
       status: item.status === "running" ? "running" : "succeeded",
       durationMs: 120 + index * 60,
@@ -1470,6 +1724,8 @@ function createEvidence(run: LocalRunView): LocalRunView["evidence"] {
       source: source.id,
       sourceTitle: source.title,
       sourceUrl: source.url,
+      alphaXivUrl: source.alphaXivUrl,
+      arxivId: source.arxivId,
       excerpt: source.excerpt,
       confidence: claimIndex === 0 ? "high" : "medium",
       conflicts: "none"
@@ -1478,13 +1734,14 @@ function createEvidence(run: LocalRunView): LocalRunView["evidence"] {
 }
 
 function createArtifacts(run: LocalRunView): LocalRunView["artifacts"] {
+  const arxiv = isArxivRun(run);
   return [
     {
       id: "markdown_report",
-      name: "Deep Research Report",
+      name: arxiv ? "arXiv Paper Reading Report" : "Deep Research Report",
       type: "Markdown",
       version: 1,
-      content: [
+      content: arxiv ? createArxivMarkdownReport(run) : [
         `# ${run.topic}`,
         "",
         `Audience: ${run.audience}`,
@@ -1512,18 +1769,94 @@ function createArtifacts(run: LocalRunView): LocalRunView["artifacts"] {
         topic: run.topic,
         audience: run.audience,
         freshnessDays: run.freshnessDays,
+        flowId: run.flowId,
         sources: sourceSummaries(run),
         evidence: run.evidence,
         claims: run.evidence.map((item, index) => ({
           id: `claim_${index + 1}`,
           text: item.claim,
           citation: item.source,
+          arxivId: (item as any).arxivId,
+          alphaXivUrl: (item as any).alphaXivUrl,
           confidence: item.confidence
+        })),
+        functionMap: run.timeline.map((item) => ({
+          stepId: item.stepId,
+          status: item.status,
+          info: functionInfoForStep(item.stepId, arxiv)
         }))
       },
       downloadUrl: `/api/runs/${run.id}/artifacts/evidence_bundle`
     }
   ].map((artifact) => withInitialArtifactVersion(artifact));
+}
+
+function createArxivMarkdownReport(run: LocalRunView) {
+  const sources = sourceSummaries(run);
+  return [
+    `# ${run.topic}`,
+    "",
+    `Audience: ${run.audience}`,
+    `Freshness window: ${run.freshnessDays} days`,
+    "",
+    `This arXiv paper reading run selected ${sources.length} papers and produced ${run.evidence.length} cited notes. Each paper keeps both the arXiv source and alphaXiv discussion link.`,
+    "",
+    "## Layer 1: Executive Takeaways",
+    "",
+    ...run.evidence.slice(0, 3).map((item, index) => `${index + 1}. ${item.claim} [${item.source}]`),
+    "",
+    "## Layer 2: Paper-By-Paper Reading Notes",
+    "",
+    ...sources.flatMap((source, index) => [
+      `### ${index + 1}. ${source.title}`,
+      "",
+      `- arXiv: ${source.url}`,
+      `- alphaXiv: ${source.alphaXivUrl || "not available"}`,
+      `- arXiv ID: ${source.arxivId || "unknown"}`,
+      `- Evidence items: ${source.evidenceCount}`,
+      ""
+    ]),
+    "## Layer 3: Cross-Paper Synthesis",
+    "",
+    "The selected papers separate retrieval design, evidence grounding, and report verification into inspectable units. The flow keeps citation metadata next to each claim so operators can audit the final report from the UI.",
+    "",
+    "## Sources",
+    "",
+    ...sources.map((source) => `- ${source.title}: ${source.url} | alphaXiv: ${source.alphaXivUrl || "not available"}`)
+  ].join("\n");
+}
+
+function isArxivRun(run: LocalRunView) {
+  const flow = getFlowForRun(run);
+  const stepIds = new Set(flow.steps.map((step) => step.id));
+  return stepIds.has("search_arxiv") && stepIds.has("read_papers") && stepIds.has("layered_summary");
+}
+
+function functionInfoForStep(stepId: string, arxiv: boolean) {
+  const common: Record<string, string> = {
+    clarify: "Clarifies the research objective before search.",
+    build_brief: "Turns the objective into an executable research brief.",
+    plan: "Plans subquestions and source strategy.",
+    search: "Finds candidate sources for the topic.",
+    rank_sources: "Ranks retrieved sources for relevance and coverage.",
+    read_sources: "Reads selected source pages and extracts usable text.",
+    extract_evidence: "Turns source excerpts into claim-level evidence.",
+    synthesize: "Builds the cited report from evidence.",
+    verify: "Checks citation coverage and output format.",
+    export: "Writes Markdown and JSON artifacts."
+  };
+  const arxivMap: Record<string, string> = {
+    scope_topic: "Normalizes the requested topic into arXiv search intent and reading criteria.",
+    search_arxiv: "Finds candidate arXiv papers matching the topic.",
+    select_papers: "Selects the papers with the best topical coverage and source metadata.",
+    read_papers: "Reads paper abstracts and metadata while preserving arXiv and alphaXiv links.",
+    extract_contributions: "Extracts contribution, method, limitation, and follow-up evidence from each paper.",
+    layered_summary: "Creates executive, paper-level, and detail-level summaries.",
+    cross_paper_synthesis: "Compares papers across methods, assumptions, and practical implications.",
+    verify_sources: "Verifies that every claim has source and alphaXiv metadata.",
+    export: "Writes the Markdown report and JSON evidence bundle."
+  };
+  return arxiv ? arxivMap[stepId] || common[stepId] || "Executes this flow step." : common[stepId] || "Executes this flow step.";
 }
 
 function updateEvidenceReview(runId: string, evidenceIndex: number, body: JsonRecord) {
@@ -1780,8 +2113,9 @@ function retryLocalRunStep(runId: string, stepId?: string) {
 
 function selectLocalSources(run: LocalRunView) {
   const sources = loadLocalResearchSources();
+  const sourcePool = isArxivRun(run) ? sources.filter((source) => source.arxivId || source.alphaXivUrl || source.tags.includes("arxiv")) : sources;
   const queryTokens = tokenize(`${run.topic} ${run.audience}`);
-  const ranked = sources
+  const ranked = sourcePool
     .map((source) => ({
       source,
       score: source.tags.reduce((total, tag) => total + (queryTokens.has(tag) ? 2 : 0), 0)
@@ -1799,12 +2133,14 @@ function loadLocalResearchSources(): LocalResearchSource[] {
 }
 
 function sourceSummaries(run: LocalRunView) {
-  const bySource = new Map<string, { id: string; title: string; url: string; evidenceCount: number }>();
+  const bySource = new Map<string, { id: string; title: string; url: string; alphaXivUrl?: string; arxivId?: string; evidenceCount: number }>();
   for (const item of run.evidence) {
     const existing = bySource.get(item.source) || {
       id: item.source,
       title: item.sourceTitle,
       url: item.sourceUrl,
+      alphaXivUrl: (item as any).alphaXivUrl,
+      arxivId: (item as any).arxivId,
       evidenceCount: 0
     };
     existing.evidenceCount += 1;

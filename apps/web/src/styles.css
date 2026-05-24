@@ -159,7 +159,7 @@
   }
 
   .workspace {
-    @apply grid min-w-0 gap-4 p-6 max-lg:p-3.5;
+    @apply grid min-w-0 content-start gap-4 p-6 max-lg:p-3.5;
   }
 
   .panel {
@@ -262,17 +262,232 @@
     @apply grid grid-cols-[280px_minmax(0,1fr)] gap-3 max-lg:grid-cols-1;
   }
 
+  .flow-run-info {
+    @apply mt-3 grid gap-3;
+  }
+
+  .builder-intro {
+    @apply mt-3 flex items-start justify-between gap-3 rounded-lg border bg-slate-50 p-3;
+  }
+
+  .builder-intro div {
+    @apply grid min-w-0 gap-1;
+  }
+
+  .builder-intro strong,
+  .builder-intro span {
+    @apply min-w-0 [overflow-wrap:anywhere];
+  }
+
+  .builder-intro span {
+    @apply text-sm leading-relaxed text-muted-foreground;
+  }
+
+  .flow-build-steps {
+    @apply mt-3 grid grid-cols-4 gap-2 max-lg:grid-cols-2 max-sm:grid-cols-1;
+  }
+
+  .build-step {
+    @apply grid min-w-0 grid-cols-[32px_minmax(0,1fr)] items-center gap-2 rounded-md border bg-white p-2.5;
+  }
+
+  .build-step span {
+    @apply grid h-8 w-8 place-items-center rounded-md bg-slate-100 text-sm font-bold text-slate-700;
+  }
+
+  .build-step strong {
+    @apply min-w-0 text-sm [overflow-wrap:anywhere];
+  }
+
+  .flow-step-map {
+    @apply grid gap-2;
+  }
+
+  .flow-builder {
+    @apply grid gap-4 rounded-lg border bg-white p-4;
+  }
+
+  .builder-header {
+    @apply mb-3 flex items-start justify-between gap-3;
+  }
+
+  .builder-header h3 {
+    @apply mb-1;
+  }
+
+  .builder-header p {
+    @apply m-0 text-sm text-muted-foreground;
+  }
+
+  .builder-fields {
+    @apply grid grid-cols-2 gap-3 max-lg:grid-cols-1;
+  }
+
+  .builder-add-row {
+    @apply grid grid-cols-[minmax(160px,1fr)_150px_minmax(180px,1fr)_minmax(160px,1fr)_auto] items-end gap-2 max-xl:grid-cols-2 max-lg:grid-cols-1;
+  }
+
+  .builder-add-row.artifact-row {
+    @apply grid-cols-[minmax(180px,1fr)_minmax(180px,1fr)_auto] max-lg:grid-cols-1;
+  }
+
+  .builder-action-panel {
+    @apply grid gap-3 rounded-lg border border-dashed bg-slate-50 p-3;
+  }
+
+  .step-palette {
+    @apply grid grid-cols-3 gap-2 max-xl:grid-cols-2 max-sm:grid-cols-1;
+  }
+
+  .step-palette-card {
+    @apply grid min-h-[104px] cursor-pointer grid-cols-[24px_minmax(0,1fr)_20px] items-start gap-2 rounded-md border bg-white p-3 text-left transition-colors hover:border-primary hover:bg-emerald-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring;
+  }
+
+  .step-palette-card > svg:first-child {
+    @apply mt-0.5 text-primary;
+  }
+
+  .step-palette-card > svg:last-child {
+    @apply mt-0.5 text-muted-foreground;
+  }
+
+  .step-palette-card span {
+    @apply grid min-w-0 gap-1;
+  }
+
+  .step-palette-card strong,
+  .step-palette-card small {
+    @apply min-w-0 [overflow-wrap:anywhere];
+  }
+
+  .step-palette-card strong {
+    @apply text-sm;
+  }
+
+  .step-palette-card small {
+    @apply text-xs leading-relaxed text-muted-foreground;
+  }
+
+  .custom-step-panel {
+    @apply rounded-md border bg-white p-3;
+  }
+
+  .custom-step-panel summary {
+    @apply cursor-pointer text-sm font-semibold;
+  }
+
+  .custom-step-panel .builder-add-row {
+    @apply mt-3;
+  }
+
+  .artifact-palette {
+    @apply grid grid-cols-2 gap-2 max-sm:grid-cols-1;
+  }
+
+  .artifact-palette-card {
+    @apply grid min-h-20 cursor-pointer content-start gap-1 rounded-md border bg-white p-3 text-left transition-colors hover:border-primary hover:bg-emerald-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring;
+  }
+
+  .artifact-palette-card strong,
+  .artifact-palette-card small {
+    @apply min-w-0 [overflow-wrap:anywhere];
+  }
+
+  .artifact-palette-card strong {
+    @apply text-sm;
+  }
+
+  .artifact-palette-card small {
+    @apply text-xs leading-relaxed text-muted-foreground;
+  }
+
+  .builder-section-heading {
+    @apply flex items-start justify-between gap-3 border-t pt-4 first:border-t-0 first:pt-0;
+  }
+
+  .builder-section-heading.compact {
+    @apply border-t-0 pt-0;
+  }
+
+  .builder-section-heading h4 {
+    @apply m-0 text-sm font-semibold;
+  }
+
+  .builder-section-heading p {
+    @apply m-0 mt-1 text-sm leading-relaxed text-muted-foreground;
+  }
+
+  .flow-step-chip {
+    @apply grid min-w-0 grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 rounded-md border bg-slate-50 p-3 text-sm;
+  }
+
+  .flow-step-chip strong,
+  .flow-step-chip span,
+  .flow-step-chip small {
+    @apply min-w-0 [overflow-wrap:anywhere];
+  }
+
+  .flow-step-chip strong {
+    @apply text-sm;
+  }
+
+  .flow-step-chip span,
+  .flow-step-chip small {
+    @apply text-muted-foreground;
+  }
+
+  .step-number {
+    @apply grid h-8 w-8 place-items-center rounded-md bg-emerald-100 text-sm font-bold text-emerald-800;
+  }
+
+  .artifact-chip-list {
+    @apply flex flex-wrap gap-2;
+  }
+
+  .artifact-chip {
+    @apply inline-grid min-h-11 min-w-44 gap-0.5 rounded-md border bg-slate-50 px-3 py-2 text-sm;
+  }
+
+  .artifact-chip strong,
+  .artifact-chip small {
+    @apply min-w-0 [overflow-wrap:anywhere];
+  }
+
+  .artifact-chip small {
+    @apply text-muted-foreground;
+  }
+
+  .builder-empty {
+    @apply rounded-md border border-dashed bg-slate-50 p-3 text-sm text-muted-foreground;
+  }
+
+  .advanced-json {
+    @apply mt-4 rounded-lg border bg-slate-50 p-3;
+  }
+
+  .advanced-json summary {
+    @apply cursor-pointer text-sm font-semibold;
+  }
+
+  .mini-danger {
+    @apply min-h-7 w-fit border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700 hover:bg-red-100;
+  }
+
   .flow-editor textarea {
     @apply w-full text-[13px] leading-relaxed;
   }
 
   .run-history button,
   .history-item {
-    @apply grid w-full min-w-0 whitespace-normal gap-1 border-input bg-card text-left text-foreground hover:bg-muted;
+    @apply grid w-full min-w-0 whitespace-normal gap-1.5 border-input bg-card text-left text-foreground hover:bg-muted;
   }
 
   .run-history button {
     @apply grid-cols-[minmax(0,1fr)_auto];
+  }
+
+  .flow-list .history-item {
+    @apply min-h-[76px] grid-cols-1 content-center px-3.5 py-3;
   }
 
   .history-item.active {
@@ -290,7 +505,11 @@
   }
 
   .history-item strong {
-    @apply text-foreground;
+    @apply block leading-snug text-foreground;
+  }
+
+  .history-item span {
+    @apply block leading-snug;
   }
 
   .run-row {
@@ -400,6 +619,110 @@
 
   .provider-row code {
     @apply break-words rounded bg-muted px-1.5 py-1 text-xs;
+  }
+
+  .provider-catalog {
+    @apply grid gap-3;
+  }
+
+  .api-key-panel {
+    @apply grid gap-3;
+  }
+
+  .api-key-row {
+    @apply grid grid-cols-[minmax(180px,0.8fr)_minmax(260px,1.2fr)] gap-3 rounded-md border bg-slate-50 p-3 max-lg:grid-cols-1;
+  }
+
+  .api-key-row > div:first-child {
+    @apply grid content-start gap-1;
+  }
+
+  .api-key-row strong,
+  .api-key-row span,
+  .api-key-row small {
+    @apply min-w-0 [overflow-wrap:anywhere];
+  }
+
+  .api-key-row span,
+  .api-key-row small {
+    @apply text-sm text-muted-foreground;
+  }
+
+  .api-key-commands,
+  .api-key-form {
+    @apply grid gap-2;
+  }
+
+  .api-key-form {
+    @apply grid-cols-[minmax(150px,0.7fr)_minmax(220px,1fr)] items-end max-lg:grid-cols-1;
+  }
+
+  .api-key-form .button-row,
+  .api-key-form small,
+  .api-key-form code,
+  .api-key-form .status-line {
+    @apply col-span-full;
+  }
+
+  .api-key-commands code,
+  .api-key-form code {
+    @apply block rounded-md bg-slate-950 px-3 py-2 text-xs text-slate-100;
+  }
+
+  .provider-catalog-row {
+    @apply grid min-w-0 grid-cols-[minmax(220px,1.1fr)_minmax(220px,0.9fr)] gap-3 rounded-md border p-3 max-xl:grid-cols-1;
+  }
+
+  .provider-catalog-main {
+    @apply grid min-w-0 content-start gap-1;
+  }
+
+  .provider-catalog-main strong,
+  .provider-catalog-main span {
+    @apply min-w-0 [overflow-wrap:anywhere];
+  }
+
+  .provider-catalog-main code {
+    @apply w-fit max-w-full break-words rounded bg-muted px-1.5 py-1 text-xs;
+  }
+
+  .provider-catalog-actions,
+  .provider-add-model {
+    @apply flex min-w-0 flex-wrap items-center gap-2;
+  }
+
+  .provider-sync-status {
+    @apply inline-flex min-h-8 items-center rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800;
+  }
+
+  .provider-sync-status.error {
+    @apply border-red-200 bg-red-50 text-red-700;
+  }
+
+  .provider-add-model input {
+    @apply min-w-52 flex-1;
+  }
+
+  .model-chip-list {
+    @apply col-span-full flex min-w-0 flex-wrap gap-2;
+  }
+
+  .model-chip {
+    @apply min-h-8 max-w-full rounded-md border border-input bg-background px-2.5 py-1 text-xs font-medium text-foreground hover:bg-accent;
+  }
+
+  .model-chip.active {
+    @apply border-emerald-300 bg-emerald-50 text-emerald-800;
+  }
+
+  .model-test-panel {
+    @apply grid grid-cols-[repeat(4,minmax(160px,1fr))] gap-3 max-xl:grid-cols-2 max-lg:grid-cols-1;
+  }
+
+  .model-test-prompt,
+  .model-test-panel > pre,
+  .model-test-panel > button {
+    @apply col-span-full;
   }
 
   .provider-test-result {
