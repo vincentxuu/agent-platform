@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const port = Number(process.env.LOCAL_API_CHECK_PORT || "8791");
@@ -8,9 +8,16 @@ const baseUrl = `http://127.0.0.1:${port}`;
 const stateDir = join(process.cwd(), ".tmp", "local-api-check");
 const devVarsPath = join(stateDir, ".dev.vars");
 const serverPath = join(process.cwd(), ".tmp", "tsc", "scripts", "local-dev-server.js");
+const localAdapterSource = readFileSync(join(process.cwd(), "packages", "local", "src", "adapter.ts"), "utf8");
 
 if (!existsSync(serverPath)) {
   throw new Error("Expected compiled local-dev-server.js. Run npm run build:ts first.");
+}
+
+for (const token of ["createLocalPlatformPaths", "loadLocalDevVars", "createLocalHealthReport", "createLocalReadinessReport"]) {
+  if (!localAdapterSource.includes(token)) {
+    throw new Error(`Expected packages/local adapter to expose ${token}`);
+  }
 }
 
 rmSync(stateDir, { recursive: true, force: true });
@@ -89,7 +96,7 @@ async function assertReadiness() {
   if (!readiness.local?.devVars?.loaded || !readiness.local.devVars.keys.includes("OPENAI_API_KEY")) {
     throw new Error("Expected local readiness report to include loaded .dev.vars keys");
   }
-  if (!readiness.providers?.configured?.some((item) => item.id === "openai_api_key" && item.ready)) {
+  if (!readiness.providers?.configured?.some((item) => item.id === "openai" && item.ready)) {
     throw new Error("Expected .dev.vars OPENAI_API_KEY to mark OpenAI provider ready");
   }
   if (!readiness.providers?.configured?.some((item) => item.id === "search" && item.ready)) {

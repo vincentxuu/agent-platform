@@ -1,4 +1,6 @@
 // @ts-nocheck
+import { Hono } from "hono";
+import { HTTPException } from "hono/http-exception";
 import { deepResearchFlow } from "../../../packages/core/src/deep-research-flow.js";
 import { assertValidFlowDefinition, findInitialStepIds, validateFlowInputs } from "../../../packages/core/src/flow.js";
 import { createId, D1AgentRepository } from "../../../packages/cloudflare/src/d1-repository.js";
@@ -6,170 +8,178 @@ import {
   getCloudflareArchitectureSummary,
   requireCloudflareBindings
 } from "../../../packages/cloudflare/src/service-map.js";
+import {
+  DEFAULT_ALLOWED_PROVIDER_IDS,
+  createProviderConfigs,
+  createProviderReadiness,
+  createProviderReadinessChecks
+} from "../../../packages/runtime/src/provider-catalog.js";
 import { DeepResearchWorkflow } from "./workflow.js";
 
 export { DeepResearchWorkflow, RunCoordinator };
 
+const app = new Hono();
+
+app.onError((error) => {
+  if (error instanceof Response) return error;
+  if (error instanceof HTTPException) return error.getResponse();
+  return json({ error: error.message || "Internal Server Error" }, { status: 500 });
+});
+
+app.get("/api/health", (c) => c.json({
+  ok: true,
+  runtime: "cloudflare",
+  services: getCloudflareArchitectureSummary()
+}));
+
+app.get("/api/flows", (c) => c.json({ flows: [deepResearchFlow] }));
+
+app.get("/api/readiness", (c) => c.json(createReadinessReport(c.env)));
+
+app.get("/api/config", async (c) => {
+  requireCloudflareBindings(c.env);
+  return c.json(await createConfigReport(c.env));
+});
+
+app.put("/api/config", async (c) => {
+  requireCloudflareBindings(c.env);
+  const result = await updateManagementConfig(c.env, await c.req.json());
+  if (result.errors.length > 0) {
+    return c.json({ error: "Invalid config request", details: result.errors }, 400);
+  }
+  return c.json(await createConfigReport(c.env));
+});
+
+app.get("/api/skills", async (c) => {
+  requireCloudflareBindings(c.env);
+  const config = await loadManagementConfig(c.env);
+  return c.json({ skills: config.skills, bindings: createSkillBindings(config) });
+});
+
+app.post("/api/skills", async (c) => {
+  requireCloudflareBindings(c.env);
+  return c.json(await createManagedSkill(c.env, await c.req.json()), 201);
+});
+
+app.patch("/api/skills/:skillId", async (c) => {
+  requireCloudflareBindings(c.env);
+  return c.json(await updateManagedSkill(c.env, c.req.param("skillId"), await c.req.json()));
+});
+
+app.post("/api/providers/:providerId/test", async (c) => {
+  requireCloudflareBindings(c.env);
+  const result = await testProvider(c.env, c.req.param("providerId"));
+  return c.json(result, result.status);
+});
+
+app.get("/api/runs", async (c) => {
+  requireCloudflareBindings(c.env);
+  const repository = new D1AgentRepository(c.env.DB);
+  await repository.seedBuiltInFlows();
+  const runs = await repository.listRuns();
+  return c.json({ runs: await Promise.all(runs.map((run) => normalizeListedRun(c.env, run))) });
+});
+
+app.delete("/api/runs", async (c) => {
+  requireCloudflareBindings(c.env);
+  const repository = new D1AgentRepository(c.env.DB);
+  const result = await repository.deleteAllRuns();
+  return c.json({ deleted: "all", runIds: result.deleted, runs: [] });
+});
+
+app.post("/api/runs", async (c) => {
+  requireCloudflareBindings(c.env);
+  const body = await c.req.json();
+  const validation = validateCloudflareRunRequest(body);
+  if (validation.errors.length > 0) {
+    return c.json({ error: "Invalid request", details: validation.errors }, 400);
+  }
+  const result = await createCloudflareRun({ env: c.env, body });
+  c.executionCtx.waitUntil(c.env.RUN_QUEUE.send({
+    type: "run.created",
+    runId: result.run.id,
+    stepRunId: result.stepRun.id,
+    stepId: result.stepRun.stepId
+  }));
+  return c.json(result, 202);
+});
+
+app.patch("/api/runs/:runId/evidence/:evidenceIndex", async (c) => {
+  requireCloudflareBindings(c.env);
+  return c.json({
+    run: await updateEvidenceReview(
+      c.env,
+      c.req.param("runId"),
+      Number(c.req.param("evidenceIndex")),
+      await c.req.json(),
+      c.req.raw
+    )
+  });
+});
+
+app.post("/api/runs/:runId/artifacts/regenerate", async (c) => {
+  requireCloudflareBindings(c.env);
+  return c.json({ run: await regenerateReviewArtifact(c.env, c.req.param("runId"), c.req.raw) });
+});
+
+app.get("/api/runs/:runId/artifacts/:artifactId/versions", async (c) => {
+  requireCloudflareBindings(c.env);
+  return c.json({ versions: await listArtifactVersions(c.env, c.req.param("runId"), c.req.param("artifactId")) });
+});
+
+app.get("/api/runs/:runId/artifacts/:artifactId/diff", async (c) => {
+  requireCloudflareBindings(c.env);
+  return c.json({ diff: await createArtifactDiff(c.env, c.req.param("runId"), c.req.param("artifactId")) });
+});
+
+app.get("/api/runs/:runId/artifacts/:artifactId", async (c) => {
+  requireCloudflareBindings(c.env);
+  return getArtifact(c.env, c.req.param("runId"), c.req.param("artifactId"));
+});
+
+app.patch("/api/runs/:runId/artifacts/:artifactId", async (c) => {
+  requireCloudflareBindings(c.env);
+  return c.json(await updateArtifactVersion(c.env, c.req.param("runId"), c.req.param("artifactId"), await c.req.json(), c.req.raw));
+});
+
+app.post("/api/runs/:runId/cancel", async (c) => {
+  requireCloudflareBindings(c.env);
+  return c.json({ run: await cancelRun(c.env, c.req.param("runId")) });
+});
+
+app.post("/api/runs/:runId/retry-step", async (c) => {
+  requireCloudflareBindings(c.env);
+  const body = await c.req.json();
+  return c.json({ run: await retryRun(c.env, c.req.param("runId"), body.stepId) }, 202);
+});
+
+app.get("/api/runs/:runId/observability", async (c) => {
+  requireCloudflareBindings(c.env);
+  const result = await getCloudflareRun(c.env, c.req.param("runId"), c.req.raw);
+  return c.json({ observability: createObservabilityReport(result.run) });
+});
+
+app.get("/api/runs/:runId", async (c) => {
+  requireCloudflareBindings(c.env);
+  return c.json(await getCloudflareRun(c.env, c.req.param("runId"), c.req.raw));
+});
+
+app.delete("/api/runs/:runId", async (c) => {
+  requireCloudflareBindings(c.env);
+  const runId = c.req.param("runId");
+  const repository = new D1AgentRepository(c.env.DB);
+  await repository.deleteRun(runId);
+  await c.env.CACHE.delete(`run:${runId}:status`);
+  await c.env.CACHE.delete(`run:${runId}:evidence-reviews`);
+  await c.env.CACHE.delete(`run:${runId}:artifact-overlays`);
+  return c.json({ deleted: runId });
+});
+
+app.notFound((c) => c.env.ASSETS.fetch(c.req.raw));
+
 export default {
   async fetch(request, env, ctx) {
-    const url = new URL(request.url);
-
-    try {
-      if (url.pathname === "/api/health") {
-        return json({
-          ok: true,
-          runtime: "cloudflare",
-          services: getCloudflareArchitectureSummary()
-        });
-      }
-
-      if (url.pathname === "/api/flows" && request.method === "GET") {
-        return json({ flows: [deepResearchFlow] });
-      }
-
-      if (url.pathname === "/api/readiness" && request.method === "GET") {
-        return json(createReadinessReport(env));
-      }
-
-      if (url.pathname === "/api/config" && request.method === "GET") {
-        requireCloudflareBindings(env);
-        return json(await createConfigReport(env));
-      }
-
-      if (url.pathname === "/api/config" && request.method === "PUT") {
-        requireCloudflareBindings(env);
-        const body = await readJson(request);
-        const result = await updateManagementConfig(env, body);
-        if (result.errors.length > 0) {
-          return json({ error: "Invalid config request", details: result.errors }, { status: 400 });
-        }
-        return json(await createConfigReport(env));
-      }
-
-      if (url.pathname === "/api/skills" && request.method === "GET") {
-        requireCloudflareBindings(env);
-        const config = await loadManagementConfig(env);
-        return json({ skills: config.skills, bindings: createSkillBindings(config) });
-      }
-
-      if (url.pathname === "/api/skills" && request.method === "POST") {
-        requireCloudflareBindings(env);
-        const body = await readJson(request);
-        return json(await createManagedSkill(env, body), { status: 201 });
-      }
-
-      const skillMatch = url.pathname.match(/^\/api\/skills\/([^/]+)$/);
-      if (skillMatch && request.method === "PATCH") {
-        requireCloudflareBindings(env);
-        const body = await readJson(request);
-        return json(await updateManagedSkill(env, skillMatch[1], body));
-      }
-
-      if (url.pathname === "/api/runs" && request.method === "GET") {
-        requireCloudflareBindings(env);
-        const repository = new D1AgentRepository(env.DB);
-        await repository.seedBuiltInFlows();
-        const runs = await repository.listRuns();
-        return json({ runs: await Promise.all(runs.map((run) => normalizeListedRun(env, run))) });
-      }
-
-      if (url.pathname === "/api/runs" && request.method === "DELETE") {
-        requireCloudflareBindings(env);
-        const repository = new D1AgentRepository(env.DB);
-        const result = await repository.deleteAllRuns();
-        return json({ deleted: "all", runIds: result.deleted, runs: [] });
-      }
-
-      if (url.pathname === "/api/runs" && request.method === "POST") {
-        requireCloudflareBindings(env);
-        const body = await readJson(request);
-        const result = await createCloudflareRun({ env, body });
-        ctx.waitUntil(env.RUN_QUEUE.send({
-          type: "run.created",
-          runId: result.run.id,
-          stepRunId: result.stepRun.id,
-          stepId: result.stepRun.stepId
-        }));
-        return json(result, { status: 202 });
-      }
-
-      const evidenceReviewMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/evidence\/([0-9]+)$/);
-      if (evidenceReviewMatch && request.method === "PATCH") {
-        requireCloudflareBindings(env);
-        const body = await readJson(request);
-        return json({ run: await updateEvidenceReview(env, evidenceReviewMatch[1], Number(evidenceReviewMatch[2]), body, request) });
-      }
-
-      const regenerateMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/artifacts\/regenerate$/);
-      if (regenerateMatch && request.method === "POST") {
-        requireCloudflareBindings(env);
-        return json({ run: await regenerateReviewArtifact(env, regenerateMatch[1], request) });
-      }
-
-      const artifactVersionsMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/artifacts\/([^/]+)\/versions$/);
-      if (artifactVersionsMatch && request.method === "GET") {
-        requireCloudflareBindings(env);
-        return json({ versions: await listArtifactVersions(env, artifactVersionsMatch[1], artifactVersionsMatch[2]) });
-      }
-
-      const artifactDiffMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/artifacts\/([^/]+)\/diff$/);
-      if (artifactDiffMatch && request.method === "GET") {
-        requireCloudflareBindings(env);
-        return json({ diff: await createArtifactDiff(env, artifactDiffMatch[1], artifactDiffMatch[2]) });
-      }
-
-      const artifactMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/artifacts\/([^/]+)$/);
-      if (artifactMatch && request.method === "GET") {
-        requireCloudflareBindings(env);
-        return getArtifact(env, artifactMatch[1], artifactMatch[2]);
-      }
-      if (artifactMatch && request.method === "PATCH") {
-        requireCloudflareBindings(env);
-        const body = await readJson(request);
-        return json(await updateArtifactVersion(env, artifactMatch[1], artifactMatch[2], body, request));
-      }
-
-      const cancelMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/cancel$/);
-      if (cancelMatch && request.method === "POST") {
-        requireCloudflareBindings(env);
-        return json({ run: await cancelRun(env, cancelMatch[1]) });
-      }
-
-      const retryMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/retry-step$/);
-      if (retryMatch && request.method === "POST") {
-        requireCloudflareBindings(env);
-        const body = await readJson(request);
-        return json({ run: await retryRun(env, retryMatch[1], body.stepId) }, { status: 202 });
-      }
-
-      const runMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
-      if (runMatch && request.method === "GET") {
-        requireCloudflareBindings(env);
-        return json(await getCloudflareRun(env, runMatch[1], request));
-      }
-
-      const observabilityMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/observability$/);
-      if (observabilityMatch && request.method === "GET") {
-        requireCloudflareBindings(env);
-        const result = await getCloudflareRun(env, observabilityMatch[1], request);
-        return json({ observability: createObservabilityReport(result.run) });
-      }
-
-      if (runMatch && request.method === "DELETE") {
-        requireCloudflareBindings(env);
-        const repository = new D1AgentRepository(env.DB);
-        await repository.deleteRun(runMatch[1]);
-        await env.CACHE.delete(`run:${runMatch[1]}:status`);
-        await env.CACHE.delete(`run:${runMatch[1]}:evidence-reviews`);
-        await env.CACHE.delete(`run:${runMatch[1]}:artifact-overlays`);
-        return json({ deleted: runMatch[1] });
-      }
-    } catch (error) {
-      if (error instanceof Response) return error;
-      return json({ error: error.message || "Internal Server Error" }, { status: 500 });
-    }
-
-    return env.ASSETS.fetch(request);
+    return app.fetch(request, env, ctx);
   },
 
   async queue(batch, env) {
@@ -256,6 +266,27 @@ async function createCloudflareRun({ env, body }) {
   };
 }
 
+function validateCloudflareRunRequest(body) {
+  const presetId = body.presetId || "standard";
+  const rawInputs = body.inputs || {};
+  const inputs = {
+    ...rawInputs,
+    topic: String(rawInputs.topic || "").trim(),
+    audience: typeof rawInputs.audience === "string" ? rawInputs.audience : "engineering leaders",
+    freshness_days: rawInputs.freshness_days === undefined || rawInputs.freshness_days === null
+      ? 365
+      : Number(rawInputs.freshness_days)
+  };
+  const errors = validateFlowInputs(deepResearchFlow, inputs);
+  if (!deepResearchFlow.presets.some((preset) => preset.id === presetId)) {
+    errors.push(`Unknown presetId: ${presetId}`);
+  }
+  if (inputs.freshness_days <= 0 || !Number.isFinite(inputs.freshness_days)) {
+    errors.push("Input freshness_days must be a positive number");
+  }
+  return { errors };
+}
+
 function createReadinessReport(env) {
   const bindingChecks = [
     bindingCheck(env, "DB", "D1"),
@@ -268,21 +299,7 @@ function createReadinessReport(env) {
     bindingCheck(env, "ASSETS", "Workers Assets"),
     bindingCheck(env, "AI", "Workers AI")
   ];
-  const providerChecks = [
-    envCheck(env, "OPENAI_API_KEY", "OpenAI"),
-    envCheck(env, "ANTHROPIC_API_KEY", "Anthropic"),
-    envCheck(env, "JINA_API_KEY", "Jina Reader"),
-    {
-      id: "search",
-      name: "Search provider",
-      ready: Boolean(env.TAVILY_API_KEY || env.EXA_API_KEY),
-      detail: env.TAVILY_API_KEY
-        ? "TAVILY_API_KEY is configured."
-        : env.EXA_API_KEY
-          ? "EXA_API_KEY is configured."
-          : "Set TAVILY_API_KEY or EXA_API_KEY for live search."
-    }
-  ];
+  const providerChecks = createProviderReadinessChecks(env);
 
   return {
     runtime: "cloudflare",
@@ -368,15 +385,9 @@ function defaultManagementConfig(env) {
       maxCostUsd: 3,
       maxIterations: 4,
       citationRequired: true,
-      allowedProviders: ["workers_ai", "openai", "anthropic", "search", "jina"]
+      allowedProviders: DEFAULT_ALLOWED_PROVIDER_IDS
     },
-    providers: [
-      { id: "workers_ai", name: "Workers AI", enabled: Boolean(env.AI), credentialRef: "AI binding" },
-      { id: "openai", name: "OpenAI", enabled: Boolean(env.OPENAI_API_KEY), credentialRef: "OPENAI_API_KEY" },
-      { id: "anthropic", name: "Anthropic", enabled: Boolean(env.ANTHROPIC_API_KEY), credentialRef: "ANTHROPIC_API_KEY" },
-      { id: "search", name: "Search", enabled: Boolean(env.TAVILY_API_KEY || env.EXA_API_KEY), credentialRef: "TAVILY_API_KEY 或 EXA_API_KEY" },
-      { id: "jina", name: "Jina Reader", enabled: Boolean(env.JINA_API_KEY), credentialRef: "JINA_API_KEY" }
-    ],
+    providers: createProviderConfigs(env),
     skills: builtInSkills()
   };
 }
@@ -389,7 +400,10 @@ function normalizeManagementConfig(input, env) {
     providerById.set(provider.id, {
       ...providerById.get(provider.id),
       enabled: Boolean(provider.enabled),
-      credentialRef: typeof provider.credentialRef === "string" ? provider.credentialRef.slice(0, 120) : providerById.get(provider.id).credentialRef
+      credentialRef: typeof provider.credentialRef === "string" ? provider.credentialRef.slice(0, 120) : providerById.get(provider.id).credentialRef,
+      activeModel: typeof provider.activeModel === "string" && providerById.get(provider.id).models.includes(provider.activeModel)
+        ? provider.activeModel
+        : providerById.get(provider.id).activeModel
     });
   }
   const skillById = new Map(fallback.skills.map((skill) => [skill.id, skill]));
@@ -589,12 +603,25 @@ function bindingCheck(env, binding, name) {
   };
 }
 
-function envCheck(env, variable, name) {
+async function testProvider(env, id) {
+  const config = await loadManagementConfig(env);
+  const provider = config.providers.find((candidate) => candidate.id === id);
+  if (!provider) return { status: 404, error: "Provider not found" };
+  const allowed = config.policy.allowedProviders.includes(provider.id);
+  const readiness = createProviderReadiness(env);
+  const ready = Boolean(provider.enabled && allowed && readiness[provider.id]);
   return {
-    id: variable.toLowerCase(),
-    name,
-    ready: Boolean(env[variable]),
-    detail: env[variable] ? `${variable} is configured.` : `Set ${variable} for live ${name} calls.`
+    status: ready ? 200 : 412,
+    id: provider.id,
+    name: provider.name,
+    ready,
+    enabled: provider.enabled,
+    allowed,
+    activeModel: provider.activeModel,
+    credentialRef: provider.credentialRef,
+    detail: ready
+      ? `${provider.name} is ready with ${provider.activeModel}.`
+      : `${provider.name} needs enabled=true, Policy allowed=true, and its credential/binding configured.`
   };
 }
 
@@ -1102,16 +1129,14 @@ function json(payload, init = {}) {
 }
 
 function badRequest(message) {
-  throw new Response(JSON.stringify({ error: "Invalid request", details: [message] }), {
-    status: 400,
-    headers: { "content-type": "application/json; charset=utf-8" }
+  throw new HTTPException(400, {
+    res: json({ error: "Invalid request", details: [message] }, { status: 400 })
   });
 }
 
 function notFound(message) {
-  throw new Response(JSON.stringify({ error: message }), {
-    status: 404,
-    headers: { "content-type": "application/json; charset=utf-8" }
+  throw new HTTPException(404, {
+    res: json({ error: message }, { status: 404 })
   });
 }
 

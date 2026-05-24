@@ -4,7 +4,7 @@ AI Agent Platform with provider routing, policy control, evidence tracking, and 
 
 ## 產品定位
 
-Agent Platform 不是單一萬能聊天機器人，而是一個可配置的 AI Agent 工作流閘道，統一管理模型、工具、資料來源、執行策略、驗證機制與最終產物。
+Agent Platform 是 **local-first、Cloudflare-deployable** 的開源 AI Agent 工作流平台。它不是單一萬能聊天機器人，而是一個可配置的 AI Agent 工作流閘道，統一管理模型、工具、資料來源、執行策略、驗證機制與最終產物。
 
 使用者的真正目標不是「跟 AI 聊天」，而是：
 
@@ -58,10 +58,27 @@ Web UI → Flow Definition → Skill System → Learning Loop
 ## 設計原則
 
 - **Flow-first，不做空白 chatbot**
-- **Cloudflare-first runtime**：Workers / D1 / KV / R2 / Queues / Durable Objects / Workers AI 作為正式部署架構，本機 runtime 保留為開發與測試替身
+- **Local-first contributor experience**：`git clone`、`npm install`、`npm run dev` 後即可看到完整 Deep Research demo run，不需要先建立 Cloudflare 帳號或 resource
+- **Cloudflare-deployable production runtime**：Workers / D1 / KV / R2 / Vectorize / Queues / Workflows / Durable Objects / Workers AI 作為正式部署架構，Cloudflare 是 production preset / deploy target，不是唯一可執行 runtime
+- **React + Vite Web UI**：前端是 React SPA，使用 TanStack Query 管理 API-driven state、polling、retry 與 artifact loading，build 後由 Workers Assets 或本機 server 提供
+- **Framework-based i18n**：Web UI 使用 `i18next` / `react-i18next` / browser language detector，預設支援 `zh-Hant` 與 `en`
+- **Hono Worker API**：Cloudflare Worker API 以 Hono route table 管理，保留與本機 server 相同的 API contract
 - **Evidence-backed outputs**：每個主要 claim 都有 citation
 - **Policy as configuration**：成本、權限、provider、human approval 都是一級配置
 - **Durable execution**：長任務可恢復、可重試、可審計
+
+## 專案結構
+
+| 路徑 | 說明 |
+|------|------|
+| `apps/web` | React + Vite SPA，使用 TanStack Query 與 react-i18next |
+| `apps/worker` | Hono-based Cloudflare Worker API 與 Workflow entrypoint |
+| `packages/core` | Flow definitions、runtime contracts、policy/provider 抽象 |
+| `packages/runtime` | 本機 runtime、provider catalog、workflow runtime support |
+| `packages/local` | Local filesystem / in-memory adapters、`.dev.vars` 載入、local readiness report |
+| `packages/cloudflare` | D1、KV、R2、Vectorize、Workers service map 等 Cloudflare adapters |
+| `packages/db` | D1 schema 與 migrations |
+| `fixtures` | 本機 deterministic Deep Research demo data |
 
 ## 文件
 
@@ -92,9 +109,9 @@ Web UI → Flow Definition → Skill System → Learning Loop
 npm run check
 ```
 
-目前檢查包含 core runtime、web shell、local API smoke test 與 Cloudflare binding / worker 架構檢查。local API smoke test 會用隔離的 `.tmp/local-api-check` 狀態目錄啟動本機 server，實際驗證 readiness、輸入錯誤、run completion、artifact download 與刪除流程。
+目前檢查包含 core runtime、React web shell、Playwright Web UI smoke test、local API smoke test、Cloudflare binding / worker 架構檢查與 Worker runtime smoke test。local API smoke test 會用隔離的 `.tmp/local-api-check` 狀態目錄啟動本機 server，實際驗證 readiness、輸入錯誤、run completion、artifact download 與刪除流程；Web UI smoke test 會用隔離的 `.tmp/web-ui-check` 狀態目錄啟動本機 server，實際打開 React UI、切換語言、建立 run，並檢查 timeline、evidence、artifact download link。
 
-本機可用模式會先 build Workers Assets 與 TypeScript，然後啟動一個本機 API server，用同一個 Web UI 跑 Deep Research run、timeline、evidence 與 artifact 檢視；這條路徑不需要先配置 Cloudflare resource ID：
+本機可用模式會先 build React Workers Assets 與 TypeScript，然後啟動一個本機 API server，用同一個 Web UI 跑 Deep Research run、timeline、evidence 與 artifact 檢視；這條路徑不需要先配置 Cloudflare resource ID：
 
 ```bash
 npm run dev
@@ -128,6 +145,8 @@ Cloudflare Worker 也維持同一組 Web UI API contract：`/api/readiness`、ru
 ```bash
 npm run build:web
 ```
+
+Web UI i18n 由 `apps/web/src/i18n.ts` 管理，預設語系為繁體中文，並支援英文。新增語系時應沿用 i18next resource structure，避免在 React components 中硬編文案。
 
 Cloudflare deploy readiness 檢查：
 

@@ -131,7 +131,7 @@ async function assertValidation() {
     inputs: { topic: "worker validation", freshness_days: 30 }
   });
   if (badPreset.status !== 400 || !JSON.stringify(badPreset.body).includes("Unknown presetId")) {
-    throw new Error("Expected Worker bad preset validation error");
+    throw new Error(`Expected Worker bad preset validation error: ${JSON.stringify(badPreset)}`);
   }
 
   const badFreshness = await postJson("/api/runs", {
@@ -139,7 +139,7 @@ async function assertValidation() {
     inputs: { topic: "worker validation", freshness_days: 0 }
   });
   if (badFreshness.status !== 400 || !JSON.stringify(badFreshness.body).includes("freshness_days")) {
-    throw new Error("Expected Worker freshness_days validation error");
+    throw new Error(`Expected Worker freshness_days validation error: ${JSON.stringify(badFreshness)}`);
   }
 }
 
@@ -274,7 +274,7 @@ async function assertRetryCancelDelete(runId) {
 
   const missing = await requestJson(`/api/runs/${runId}`);
   if (missing.status !== 404) {
-    throw new Error("Expected deleted Worker run to return 404");
+    throw new Error(`Expected deleted Worker run to return 404: ${JSON.stringify(missing)}`);
   }
 }
 
@@ -331,7 +331,10 @@ async function putJson(path, body) {
 
 async function requestJson(path, init = {}) {
   const response = await fetch(`${baseUrl}${path}`, init);
-  const body = await response.json();
+  const contentType = response.headers.get("content-type") || "";
+  const body = contentType.includes("application/json")
+    ? await response.json()
+    : { error: `Expected JSON from ${path}, got ${contentType || "unknown content-type"}`, text: (await response.text()).slice(0, 240) };
   return { ok: response.ok, status: response.status, body };
 }
 

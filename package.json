@@ -10,6 +10,7 @@
     "check:types": "tsc --noEmit",
     "check:runtime": "npm run build:ts && node .tmp/tsc/scripts/check-runtime.js",
     "check:web": "npm run build:ts && node .tmp/tsc/scripts/check-web.js",
+    "check:web-ui": "npm run build:web && npm run build:ts && node .tmp/tsc/scripts/check-web-ui.js",
     "check:local-api": "npm run build:web && npm run build:ts && node .tmp/tsc/scripts/check-local-api.js",
     "check:deploy-readiness": "npm run build:ts && node .tmp/tsc/scripts/check-deploy-readiness.js",
     "check:cloudflare": "npm run build:ts && node .tmp/tsc/scripts/check-cloudflare.js",
@@ -21,14 +22,27 @@
     "cloudflare:setup:apply": "npm run build:ts && node .tmp/tsc/scripts/cloudflare-deploy.js --apply-setup",
     "cloudflare:deploy:remote": "npm run build:ts && node .tmp/tsc/scripts/cloudflare-deploy.js --deploy",
     "cloudflare:smoke:remote": "npm run build:ts && node .tmp/tsc/scripts/check-remote-worker.js",
-    "check": "npm run check:types && npm run build:web && npm run build:ts && node .tmp/tsc/scripts/check-runtime.js && node .tmp/tsc/scripts/check-web.js && node .tmp/tsc/scripts/check-local-api.js && node .tmp/tsc/scripts/check-deploy-readiness.js && node .tmp/tsc/scripts/check-cloudflare.js && npx wrangler deploy --dry-run && node .tmp/tsc/scripts/check-worker-runtime.js"
+    "check": "npm run check:types && npm run build:web && npm run build:ts && node .tmp/tsc/scripts/check-runtime.js && node .tmp/tsc/scripts/check-web.js && node .tmp/tsc/scripts/check-web-ui.js && node .tmp/tsc/scripts/check-local-api.js && node .tmp/tsc/scripts/check-deploy-readiness.js && node .tmp/tsc/scripts/check-cloudflare.js && npx wrangler deploy --dry-run && node .tmp/tsc/scripts/check-worker-runtime.js"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260521.0",
     "@types/node": "^25.9.1",
+    "@types/react": "^19.2.15",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.4",
+    "playwright": "^1.60.0",
     "tsx": "^4.20.0",
     "typescript": "^5.8.0",
     "vite": "^6.3.0",
     "wrangler": "^4.18.0"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.100.14",
+    "hono": "^4.12.22",
+    "i18next": "^26.2.0",
+    "i18next-browser-languagedetector": "^8.2.1",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "react-i18next": "^17.0.8"
   }
 }

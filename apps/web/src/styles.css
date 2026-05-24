@@ -13,6 +13,10 @@ body {
   margin: 0;
 }
 
+#root {
+  min-height: 100vh;
+}
+
 .shell {
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
@@ -41,6 +45,10 @@ body {
   padding: 8px 0;
 }
 
+.language-switcher {
+  margin-top: 24px;
+}
+
 .workspace {
   display: grid;
   gap: 16px;
@@ -59,6 +67,10 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.panel-heading > div {
+  min-width: 0;
 }
 
 .panel-heading.compact {
@@ -111,9 +123,26 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 button.secondary {
   background: #ffffff;
   color: #234c41;
+}
+
+.button-link {
+  min-height: 38px;
+  border: 1px solid #234c41;
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #234c41;
+  color: #ffffff;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
 }
 
 .button-row {
@@ -166,6 +195,21 @@ pre {
   color: #263b35;
   border-color: #d6d9d2;
   text-align: left;
+}
+
+.history-item {
+  display: grid;
+  gap: 4px;
+}
+
+.history-item.active {
+  border-color: #234c41;
+  box-shadow: inset 3px 0 0 #234c41;
+}
+
+.history-item span {
+  color: #66706b;
+  font-size: 13px;
 }
 
 .run-row {
@@ -222,10 +266,25 @@ button.danger {
   gap: 12px;
 }
 
+.grid.tight {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
 .card {
   border: 1px solid #e0e1dc;
   border-radius: 8px;
   padding: 12px;
+}
+
+.card-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.card-heading h3 {
+  min-width: 0;
 }
 
 .card p {
@@ -236,6 +295,27 @@ button.danger {
 .card a {
   color: #234c41;
   font-weight: 600;
+}
+
+.muted,
+.empty {
+  color: #66706b;
+}
+
+.empty {
+  border: 1px dashed #d4d8cf;
+  border-radius: 8px;
+  padding: 14px;
+  background: #fbfcfa;
+}
+
+.section-actions {
+  margin-bottom: 12px;
+}
+
+.summary.compact {
+  max-height: 220px;
+  overflow: auto;
 }
 
 .evidence-card,
@@ -358,9 +438,23 @@ button.danger {
 
 .provider-row {
   display: grid;
-  grid-template-columns: minmax(130px, 1fr) minmax(110px, 1fr) minmax(160px, 1.4fr);
+  grid-template-columns: minmax(130px, 1fr) minmax(110px, 1fr) minmax(180px, 1.1fr) minmax(160px, 1.2fr) auto;
   gap: 8px;
   align-items: center;
+}
+
+.provider-row code {
+  overflow-wrap: anywhere;
+}
+
+.provider-list {
+  display: grid;
+  gap: 8px;
+}
+
+.provider-test-result {
+  grid-column: 1 / -1;
+  color: #55605c;
 }
 
 .status-line {

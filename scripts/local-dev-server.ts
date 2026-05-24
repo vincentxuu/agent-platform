@@ -1,10 +1,20 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { deepResearchFlow } from "../packages/core/src/deep-research-flow.js";
 import { validateFlowInputs } from "../packages/core/src/flow.js";
-import { getCloudflareArchitectureSummary } from "../packages/cloudflare/src/service-map.js";
 import { InMemoryFlowRuntime } from "../packages/runtime/src/flow-runtime.js";
+import {
+  DEFAULT_ALLOWED_PROVIDER_IDS,
+  createProviderConfigs,
+  createProviderReadiness
+} from "../packages/runtime/src/provider-catalog.js";
+import {
+  createLocalHealthReport,
+  createLocalPlatformPaths,
+  createLocalReadinessReport,
+  loadLocalDevVars
+} from "../packages/local/src/adapter.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -77,6 +87,8 @@ type ManagementConfig = {
     name: string;
     enabled: boolean;
     credentialRef: string;
+    models: string[];
+    activeModel: string;
   }>;
   skills: ManagedSkill[];
 };
@@ -93,18 +105,18 @@ type ManagedSkill = {
   source: "built-in" | "draft";
 };
 
-const port = Number(process.env.PORT || "8787");
-const webRoot = join(process.cwd(), "apps/web/dist");
-const localStateDir = process.env.LOCAL_STATE_DIR || join(process.cwd(), ".local");
-const runStorePath = join(localStateDir, "agent-platform-runs.json");
-const configStorePath = join(localStateDir, "agent-platform-config.json");
-const wranglerPath = join(process.cwd(), "wrangler.toml");
-const migrationsDir = join(process.cwd(), "packages/db/migrations");
-const localSourcesPath = join(process.cwd(), "fixtures/local-research-sources.json");
-const devVarsPath = process.env.DEV_VARS_PATH || join(process.cwd(), ".dev.vars");
+const paths = createLocalPlatformPaths();
+const {
+  port,
+  webRoot,
+  localStateDir,
+  runStorePath,
+  configStorePath,
+  localSourcesPath
+} = paths;
 let idCounter = 0;
 
-const loadedDevVars = loadDevVars();
+const loadedDevVars = loadLocalDevVars(paths.devVarsPath);
 const runtime = new InMemoryFlowRuntime({
   idFactory(prefix: string) {
     idCounter += 1;
@@ -122,20 +134,7 @@ const server = createServer(async (request, response) => {
     const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
 
     if (url.pathname === "/api/health") {
-      return sendJson(response, {
-        ok: true,
-        runtime: "local-dev",
-        persistence: {
-          driver: "file",
-          path: runStorePath
-        },
-        services: [
-          { service: "Workers", role: "API surface simulated by local-dev-server" },
-          { service: "D1", role: "In-memory repository replacement" },
-          { service: "R2", role: "In-memory artifact replacement" },
-          { service: "Workflows", role: "Timed local run progression" }
-        ]
-      });
+      return sendJson(response, createLocalHealthReport(paths));
     }
 
     if (url.pathname === "/api/flows" && request.method === "GET") {
@@ -176,6 +175,12 @@ const server = createServer(async (request, response) => {
       const result = updateManagedSkill(skillMatch[1], body);
       if (!result.skill) return sendJson(response, { error: result.error }, result.status);
       return sendJson(response, { skill: result.skill, skills: managementConfig.skills });
+    }
+
+    const providerTestMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/test$/);
+    if (providerTestMatch && request.method === "POST") {
+      const result = testProvider(providerTestMatch[1]);
+      return sendJson(response, result, result.status);
     }
 
     if (url.pathname === "/api/runs" && request.method === "GET") {
@@ -371,80 +376,7 @@ function validateRunRequest(body: JsonRecord) {
 }
 
 function createReadinessReport() {
-  const wrangler = existsSync(wranglerPath) ? readFileSync(wranglerPath, "utf8") : "";
-  const migrationCount = existsSync(migrationsDir)
-    ? readdirSync(migrationsDir).filter((file) => file.endsWith(".sql")).length
-    : 0;
-  const resourceChecks = [
-    {
-      id: "d1",
-      name: "D1 database_id",
-      ready: !wrangler.includes('database_id = "00000000-0000-0000-0000-000000000000"'),
-      detail: "Replace the placeholder D1 database_id in wrangler.toml before real Cloudflare deploy."
-    },
-    {
-      id: "kv",
-      name: "KV namespace id",
-      ready: !wrangler.includes('id = "00000000000000000000000000000000"'),
-      detail: "Replace the placeholder KV namespace id in wrangler.toml before real Cloudflare deploy."
-    },
-    {
-      id: "migrations",
-      name: "D1 migrations",
-      ready: migrationCount > 0,
-      detail: `${migrationCount} SQL migration files detected.`
-    },
-    {
-      id: "assets",
-      name: "Workers Assets build",
-      ready: existsSync(webRoot),
-      detail: existsSync(webRoot) ? "apps/web/dist exists." : "Run npm run build:web before serving Workers Assets."
-    }
-  ];
-
-  const providerChecks = [
-    envCheck("OPENAI_API_KEY", "OpenAI"),
-    envCheck("ANTHROPIC_API_KEY", "Anthropic"),
-    envCheck("JINA_API_KEY", "Jina Reader"),
-    {
-      id: "search",
-      name: "Search provider",
-      ready: Boolean(process.env.TAVILY_API_KEY || process.env.EXA_API_KEY),
-      detail: process.env.TAVILY_API_KEY
-        ? "TAVILY_API_KEY is configured."
-        : process.env.EXA_API_KEY
-          ? "EXA_API_KEY is configured."
-          : "Set TAVILY_API_KEY or EXA_API_KEY for live search."
-    }
-  ];
-
-  return {
-    runtime: "local-dev",
-    usableNow: true,
-    local: {
-      server: `http://127.0.0.1:${port}`,
-      devVars: {
-        path: devVarsPath,
-        loaded: loadedDevVars.length > 0,
-        keys: loadedDevVars
-      },
-      persistence: {
-        driver: "file",
-        path: runStorePath,
-        ready: existsSync(runStorePath),
-        runCount: runViews.size
-      }
-    },
-    cloudflare: {
-      deployReady: resourceChecks.every((check) => check.ready),
-      resources: resourceChecks,
-      services: getCloudflareArchitectureSummary()
-    },
-    providers: {
-      liveProviderReady: providerChecks.some((check) => check.ready),
-      configured: providerChecks
-    }
-  };
+  return createLocalReadinessReport({ paths, loadedDevVars, runCount: runViews.size });
 }
 
 function createConfigReport() {
@@ -495,15 +427,9 @@ function defaultManagementConfig(): ManagementConfig {
       maxCostUsd: 3,
       maxIterations: 4,
       citationRequired: true,
-      allowedProviders: ["workers_ai", "openai", "anthropic", "search", "jina"]
+      allowedProviders: DEFAULT_ALLOWED_PROVIDER_IDS
     },
-    providers: [
-      { id: "workers_ai", name: "Workers AI", enabled: true, credentialRef: "AI binding" },
-      { id: "openai", name: "OpenAI", enabled: Boolean(process.env.OPENAI_API_KEY), credentialRef: "OPENAI_API_KEY" },
-      { id: "anthropic", name: "Anthropic", enabled: Boolean(process.env.ANTHROPIC_API_KEY), credentialRef: "ANTHROPIC_API_KEY" },
-      { id: "search", name: "Search", enabled: Boolean(process.env.TAVILY_API_KEY || process.env.EXA_API_KEY), credentialRef: "TAVILY_API_KEY 或 EXA_API_KEY" },
-      { id: "jina", name: "Jina Reader", enabled: Boolean(process.env.JINA_API_KEY), credentialRef: "JINA_API_KEY" }
-    ],
+    providers: createProviderConfigs(process.env, { localWorkersAiReady: true }),
     skills: builtInSkills()
   };
 }
@@ -536,7 +462,10 @@ function normalizeManagementConfig(input: Partial<ManagementConfig>): Management
     providerById.set(provider.id, {
       ...providerById.get(provider.id)!,
       enabled: Boolean(provider.enabled),
-      credentialRef: typeof provider.credentialRef === "string" ? provider.credentialRef.slice(0, 120) : providerById.get(provider.id)!.credentialRef
+      credentialRef: typeof provider.credentialRef === "string" ? provider.credentialRef.slice(0, 120) : providerById.get(provider.id)!.credentialRef,
+      activeModel: typeof provider.activeModel === "string" && providerById.get(provider.id)!.models.includes(provider.activeModel)
+        ? provider.activeModel
+        : providerById.get(provider.id)!.activeModel
     });
   }
   const skillById = new Map(fallback.skills.map((skill) => [skill.id, skill]));
@@ -736,55 +665,25 @@ function persistManagementConfig() {
   renameSync(tempPath, configStorePath);
 }
 
-function envCheck(variable: string, name: string) {
+function testProvider(id: string) {
+  const provider = managementConfig.providers.find((candidate) => candidate.id === id);
+  if (!provider) return { status: 404, error: "Provider not found" };
+  const allowed = managementConfig.policy.allowedProviders.includes(provider.id);
+  const readiness = createProviderReadiness(process.env, { localWorkersAiReady: true });
+  const ready = Boolean(provider.enabled && allowed && readiness[provider.id]);
   return {
-    id: variable.toLowerCase(),
-    name,
-    ready: Boolean(process.env[variable]),
-    detail: process.env[variable] ? `${variable} is configured.` : `Set ${variable} for live ${name} calls.`
+    status: ready ? 200 : 412,
+    id: provider.id,
+    name: provider.name,
+    ready,
+    enabled: provider.enabled,
+    allowed,
+    activeModel: provider.activeModel,
+    credentialRef: provider.credentialRef,
+    detail: ready
+      ? `${provider.name} is ready with ${provider.activeModel}.`
+      : `${provider.name} needs enabled=true, Policy allowed=true, and its credential/binding configured.`
   };
-}
-
-function loadDevVars() {
-  if (!existsSync(devVarsPath)) return [];
-
-  const loaded: string[] = [];
-  const lines = readFileSync(devVarsPath, "utf8").split(/\r?\n/);
-  for (const line of lines) {
-    const parsed = parseDevVarLine(line);
-    if (!parsed) continue;
-    const { key, value } = parsed;
-    if (process.env[key] === undefined) {
-      process.env[key] = value;
-      loaded.push(key);
-    }
-  }
-  return loaded;
-}
-
-function parseDevVarLine(line: string) {
-  const trimmed = line.trim();
-  if (!trimmed || trimmed.startsWith("#")) return undefined;
-  const assignment = trimmed.startsWith("export ") ? trimmed.slice("export ".length).trim() : trimmed;
-  const equalsIndex = assignment.indexOf("=");
-  if (equalsIndex <= 0) return undefined;
-  const key = assignment.slice(0, equalsIndex).trim();
-  if (!/^[A-Z_][A-Z0-9_]*$/.test(key)) return undefined;
-  const value = stripInlineComment(assignment.slice(equalsIndex + 1).trim());
-  return { key, value: unquoteDevVarValue(value) };
-}
-
-function stripInlineComment(value: string) {
-  if (value.startsWith("\"") || value.startsWith("'")) return value;
-  const hashIndex = value.indexOf("#");
-  return hashIndex === -1 ? value.trim() : value.slice(0, hashIndex).trim();
-}
-
-function unquoteDevVarValue(value: string) {
-  if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
-    return value.slice(1, -1);
-  }
-  return value;
 }
 
 function scheduleLocalProgress(runId: string) {
