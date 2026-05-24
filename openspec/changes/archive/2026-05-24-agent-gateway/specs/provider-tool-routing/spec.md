@@ -3,6 +3,18 @@
 ### Requirement: Provider registry
 The system SHALL maintain provider records for LLM, search, reader, knowledge, action, and verifier providers with capability metadata, credential references, health, latency, cost, and quota status.
 
+#### Scenario: Configure provider
+- **WHEN** an operator creates or updates a provider with role, capability metadata, credential reference, enabled state, health check configuration, cost metadata, and fallback priority
+- **THEN** the system persists the provider configuration and makes it available to flow validation and runtime routing
+
+#### Scenario: Test provider readiness
+- **WHEN** an operator tests a provider configuration
+- **THEN** the system records readiness, health, latency, and any credential or capability errors without exposing secret values
+
+#### Scenario: Disable provider
+- **WHEN** an operator disables a provider used by existing flow versions
+- **THEN** the system prevents new runs from selecting that provider while preserving prior run audit records
+
 #### Scenario: Select a provider for a step
 - **WHEN** a step requests a provider role such as planner, search, reader, synthesizer, or verifier
 - **THEN** the system selects an allowed provider that matches the step, preset, policy, and current provider health

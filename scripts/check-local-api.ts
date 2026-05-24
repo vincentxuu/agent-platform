@@ -55,9 +55,10 @@ try {
   await waitForServer();
   assertCorruptStoreRecovery();
   await assertReadiness();
+  const customFlowId = await assertFlowDefineCommands();
   await assertConfigEditing();
   await assertValidation();
-  const runId = await assertRunLifecycle();
+  const runId = await assertRunLifecycle(customFlowId);
   await assertArtifacts(runId);
   await assertEvidenceReviewAndRegeneration(runId);
   await assertDelete(runId);
@@ -168,6 +169,16 @@ async function assertConfigEditing() {
     throw new Error("Expected local skill version update to persist");
   }
 
+  const skillEval = await requestJson("/api/skills/research-planner/evals", { method: "POST" });
+  if (skillEval.status !== 200 || skillEval.body.eval?.passed !== true) {
+    throw new Error("Expected local skill eval command to pass for enabled skill");
+  }
+
+  const disabledSkill = await requestJson("/api/skills/research-planner", { method: "DELETE" });
+  if (disabledSkill.status !== 200 || disabledSkill.body.skill?.enabled !== false) {
+    throw new Error("Expected local skill delete command to disable skill");
+  }
+
   const draftSkill = await requestJson("/api/skills", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -176,6 +187,120 @@ async function assertConfigEditing() {
   if (draftSkill.status !== 201 || !draftSkill.body.skills?.some((skill) => skill.id === "custom-checker" && skill.source === "draft")) {
     throw new Error("Expected local draft skill creation");
   }
+
+  const provider = await requestJson("/api/providers", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: "local-custom-provider", name: "Local Custom Provider", enabled: false, credentialRef: "LOCAL_CUSTOM_KEY", models: ["local-model"], activeModel: "local-model" })
+  });
+  if (provider.status !== 201 || provider.body.provider?.id !== "local-custom-provider") {
+    throw new Error("Expected local provider creation");
+  }
+
+  const enabledProvider = await requestJson("/api/providers/local-custom-provider", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ enabled: true, activeModel: "local-model" })
+  });
+  if (enabledProvider.status !== 200 || enabledProvider.body.provider?.enabled !== true) {
+    throw new Error("Expected local provider update to enable provider");
+  }
+
+  const disabledProvider = await requestJson("/api/providers/local-custom-provider", { method: "DELETE" });
+  if (disabledProvider.status !== 200 || disabledProvider.body.provider?.enabled !== false) {
+    throw new Error("Expected local provider delete command to disable provider");
+  }
+
+  const createdPolicy = await requestJson("/api/policies", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      id: "local-check-policy",
+      name: "Local Check Policy",
+      draft: {
+        maxCostUsd: 0.75,
+        maxIterations: 3,
+        citationRequired: true,
+        allowedProviders: ["workers_ai", "search"]
+      }
+    })
+  });
+  if (createdPolicy.status !== 201 || createdPolicy.body.policy?.id !== "local-check-policy") {
+    throw new Error("Expected local policy draft creation");
+  }
+
+  const updatedPolicy = await requestJson("/api/policies/local-check-policy", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ draft: { maxCostUsd: 1.25, maxIterations: 4, citationRequired: false, allowedProviders: ["search"] } })
+  });
+  if (updatedPolicy.status !== 200 || updatedPolicy.body.policy?.draft?.maxCostUsd !== 1.25) {
+    throw new Error("Expected local policy draft update");
+  }
+
+  const publishedPolicy = await requestJson("/api/policies/local-check-policy/versions", { method: "POST" });
+  if (publishedPolicy.status !== 201 || publishedPolicy.body.policy?.version !== 1) {
+    throw new Error("Expected local policy publication");
+  }
+
+  const appliedPolicy = await requestJson("/api/policies/local-check-policy/apply", { method: "POST" });
+  if (appliedPolicy.status !== 200 || appliedPolicy.body.config?.policy?.allowedProviders?.[0] !== "search") {
+    throw new Error("Expected local policy apply-to-flow command");
+  }
+}
+
+async function assertFlowDefineCommands() {
+  const initial = await getJson("/api/flows");
+  if (!initial.flows.some((flow) => flow.id === "deep_research")) {
+    throw new Error("Expected local flows endpoint to include Deep Research");
+  }
+
+  const clone = await postJson("/api/flows/deep_research/clone", { id: "local_check_flow", name: "Local Check Flow" });
+  if (clone.status !== 201 || clone.body.flow?.id !== "local_check_flow" || !clone.body.flow.hasDraft) {
+    throw new Error(`Expected flow clone command to create a draft: ${JSON.stringify(clone.body)}`);
+  }
+
+  const definition = clone.body.flow.draft || clone.body.flow.definition;
+  definition.name = "Local Check Flow Updated";
+  definition.inputs = definition.inputs.map((input) => input.id === "topic" ? { ...input, required: true } : input);
+  const updated = await requestJson("/api/flows/local_check_flow", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ definition })
+  });
+  if (updated.status !== 200 || updated.body.validation?.length !== 0 || !updated.body.flow.hasDraft) {
+    throw new Error(`Expected flow draft update to validate cleanly: ${JSON.stringify(updated.body)}`);
+  }
+
+  const published = await requestJson("/api/flows/local_check_flow/versions", { method: "POST" });
+  if (published.status !== 201 || published.body.version !== 1 || published.body.flow.status !== "published") {
+    throw new Error(`Expected flow publish command to create v1: ${JSON.stringify(published.body)}`);
+  }
+
+  const detail = await getJson("/api/flows/local_check_flow");
+  if (detail.flow.version !== 1 || detail.flow.hasDraft !== false) {
+    throw new Error("Expected published flow detail to expose v1 without a draft");
+  }
+
+  const invalidClone = await postJson("/api/flows/local_check_flow/clone", { id: "broken_flow", name: "Broken Flow" });
+  const brokenDefinition = invalidClone.body.flow.draft;
+  brokenDefinition.edges = [{ from: "missing", to: "also_missing" }];
+  await requestJson("/api/flows/broken_flow", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ definition: brokenDefinition })
+  });
+  const invalidPublish = await requestJson("/api/flows/broken_flow/versions", { method: "POST" });
+  if (invalidPublish.status !== 400 || !JSON.stringify(invalidPublish.body).includes("unknown")) {
+    throw new Error("Expected invalid flow publication to be rejected with validation errors");
+  }
+
+  const deleted = await requestJson("/api/flows/broken_flow", { method: "DELETE" });
+  if (deleted.status !== 200 || deleted.body.deleted !== "broken_flow") {
+    throw new Error("Expected empty invalid draft to be deletable");
+  }
+
+  return "local_check_flow";
 }
 
 async function assertValidation() {
@@ -204,8 +329,8 @@ async function assertValidation() {
   }
 }
 
-async function assertRunLifecycle() {
-  const created = await postJson("/api/runs", {
+async function assertRunLifecycle(flowId = "deep_research") {
+  const created = await postJson(`/api/flows/${flowId}/runs`, {
     presetId: "deep",
     inputs: {
       topic: "local api smoke test",
@@ -277,6 +402,22 @@ async function assertEvidenceReviewAndRegeneration(runId) {
   if (reviewed.status !== 200 || reviewed.body.run?.evidence?.[0]?.review?.status !== "accepted") {
     throw new Error("Expected local evidence review to be saved on the run");
   }
+  const rejected = await requestJson(`/api/runs/${runId}/evidence/1`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ status: "rejected", note: "reject this source" })
+  });
+  if (rejected.status !== 200 || rejected.body.run?.evidence?.[1]?.review?.status !== "rejected") {
+    throw new Error("Expected local evidence reject command to be saved on the run");
+  }
+  const annotated = await requestJson(`/api/runs/${runId}/evidence/2`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ status: "watch", note: "needs follow-up annotation" })
+  });
+  if (annotated.status !== 200 || annotated.body.run?.evidence?.[2]?.review?.note !== "needs follow-up annotation") {
+    throw new Error("Expected local evidence annotation command to be saved on the run");
+  }
 
   const regenerated = await requestJson(`/api/runs/${runId}/artifacts/regenerate`, { method: "POST" });
   if (regenerated.status !== 200 || !regenerated.body.run?.artifacts?.some((artifact) => artifact.id === "review_summary")) {
@@ -284,7 +425,7 @@ async function assertEvidenceReviewAndRegeneration(runId) {
   }
 
   const summary = await getJson(`/api/runs/${runId}/artifacts/review_summary`);
-  if (summary.reviewedCount !== 1 || summary.acceptedCount !== 1) {
+  if (summary.reviewedCount !== 3 || summary.acceptedCount !== 1 || summary.rejectedCount !== 1) {
     throw new Error("Expected local review summary artifact to reflect evidence review");
   }
 
@@ -301,14 +442,35 @@ async function assertEvidenceReviewAndRegeneration(runId) {
     throw new Error("Expected local artifact edit to create version 2");
   }
 
+  const approvedArtifact = await requestJson(`/api/runs/${runId}/artifacts/review_summary`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      content: { ...editedArtifact.content, review: { status: "accepted" } },
+      note: "approve local review summary"
+    })
+  });
+  if (approvedArtifact.status !== 200 || approvedArtifact.body.artifact?.content?.review?.status !== "accepted") {
+    throw new Error("Expected local artifact approve command to persist review state");
+  }
+
   const versions = await getJson(`/api/runs/${runId}/artifacts/review_summary/versions`);
-  if (!Array.isArray(versions.versions) || versions.versions.length !== 2) {
-    throw new Error("Expected local artifact versions endpoint to list two versions");
+  if (!Array.isArray(versions.versions) || versions.versions.length !== 3) {
+    throw new Error("Expected local artifact versions endpoint to list three versions");
   }
 
   const diff = await getJson(`/api/runs/${runId}/artifacts/review_summary/diff`);
   if (!Array.isArray(diff.diff?.lines) || diff.diff.lines.length === 0) {
     throw new Error("Expected local artifact diff endpoint to return changed lines");
+  }
+
+  const improvement = await requestJson("/api/improvements", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sourceRunId: runId, type: "eval-case", summary: "Create local regression case from corrected run" })
+  });
+  if (improvement.status !== 201 || improvement.body.proposal?.evalCase?.sourceRunId !== runId) {
+    throw new Error("Expected local improvement proposal command to create a draft eval case from run feedback");
   }
 }
 

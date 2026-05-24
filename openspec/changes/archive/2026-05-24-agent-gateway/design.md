@@ -2,7 +2,7 @@
 
 Agent Gateway introduces a local-first agent workflow platform for controlled, auditable, evidence-backed work. The proposal adds multiple cross-cutting subsystems: flow runtime, skill packages, provider/MCP routing, policy controls, context and memory, observability, evidence, artifacts, evaluation, learning proposals, and Web UI surfaces.
 
-The MVP should prove the platform through a Deep Research flow without over-building a fully generic visual workflow builder or cloud orchestration layer. The first implementation should favor explicit schemas, durable local records, clear permission boundaries, and inspectable run history over autonomous free-form agent behavior.
+The MVP should prove the platform through a Deep Research flow without over-building a fully generic visual workflow builder or cloud orchestration layer. The first implementation should favor explicit command surfaces, durable local records, clear permission boundaries, and inspectable run history over autonomous free-form agent behavior or read-only dashboards.
 
 Primary constraints:
 
@@ -16,7 +16,7 @@ Primary constraints:
 
 **Goals:**
 
-- Define the MVP architecture for running curated flows with presets, policies, skill bindings, provider/tool routing, context assembly, guard checks, checkpointing, evidence capture, artifact output, and observability.
+- Define the MVP architecture for a command-complete workflow loop: define flows, configure providers/policies/skills, run flows, observe execution, control failures, verify evidence, produce artifacts, and capture improvement proposals.
 - Establish stable data boundaries between flows, skills, providers, policies, context, memory, evals, traces, evidence, and artifacts.
 - Support an initial Deep Research flow end to end: topic input, planning, search, reading, evidence extraction, synthesis, verification, Markdown report, JSON evidence bundle, trace, checkpoint, and eval capture.
 - Keep the system local-first and Docker-deployable with SQLite as the initial persistence layer.
@@ -45,7 +45,7 @@ Alternatives considered:
 
 ### 2. Represent Work As Versioned Flows With Presets And Explicit Steps
 
-Flows will be stored as versioned definitions containing input schema, presets, steps, edges, artifact schema, and allowed capabilities. Runs reference a specific FlowVersion and FlowPreset so behavior can be audited and reproduced.
+Flows will be stored as versioned definitions containing input schema, presets, steps, edges, artifact schema, and allowed capabilities. Users must be able to create or clone a draft, edit it through structured controls, validate bindings, and publish an immutable version. Runs reference a specific FlowVersion and FlowPreset so behavior can be audited and reproduced.
 
 Rationale: the product should guide users through task-specific workflows rather than expose a blank chat surface. Versioned flow definitions also let future flows reuse the same runtime and skill packages.
 
@@ -155,14 +155,14 @@ Alternatives considered:
 
 ### 12. Define UI Around Workflows, Inspection, And Control
 
-The Web UI should expose Run, Flows, Skills, Providers, Policies, Context, Memory, Runs, Evaluations, Observability, Evidence, and Artifacts. The first experience should be running a real flow, not a marketing-style landing page or empty chat.
+The Web UI should expose command surfaces for Define, Configure, Run, Observe, Control, Verify, Produce, and Improve across Run, Flows, Skills, Providers, Policies, Context, Memory, Runs, Evaluations, Observability, Evidence, and Artifacts. The first experience should be a usable workflow loop, not a marketing-style landing page, empty chat, or read-only admin dashboard.
 
-Rationale: the target user wants controllable work execution and auditability. The UI must make run progress, provider usage, evidence, cost, retries, context composition, and artifacts visible.
+Rationale: the target user wants controllable work execution and auditability. The UI must make run progress, provider usage, evidence, cost, retries, context composition, and artifacts visible, and it must expose the commands needed to change state when the workflow needs definition, configuration, recovery, verification, or improvement.
 
 Alternatives considered:
 
 - Chat-first UI: familiar, but misaligned with flow-based execution.
-- Admin dashboard first: easier to build around tables, but delays the core run experience.
+- Admin dashboard first: easier to build around tables, but read-only views do not prove the platform.
 
 ## Risks / Trade-offs
 
@@ -187,7 +187,7 @@ Alternatives considered:
 6. Add context assembly with ContextBlocks, budget allocation, tool subset selection, compression records, and ContextSnapshot inspection.
 7. Add Deep Research v1 flow with Quick, Standard, and Deep presets and the end-to-end path from topic input to Markdown report and JSON evidence bundle.
 8. Add evidence extraction, citation validation, artifact versioning, and basic evals for skill output schema, evidence/citation coverage, artifact format, policy permissions, and regression case capture.
-9. Add Web UI surfaces needed for the first run experience: flow selection, input form, preset summary, run timeline, step details, context view, evidence viewer, artifact viewer, and basic provider/policy/skill management.
+9. Add Web UI command surfaces needed for the first workflow loop: flow create/clone/edit/validate/publish, provider test/disable, policy version/apply, skill install/eval/disable, run creation, timeline inspection, retry/cancel/resume, evidence approve/reject, artifact regenerate/export, and improvement proposal creation.
 10. Keep rollback simple during MVP: migrations should be additive where possible, flow definitions are versioned, and failed runs remain inspectable without being deleted.
 
 ## Open Questions

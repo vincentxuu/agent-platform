@@ -186,6 +186,26 @@ pre {
   gap: 8px;
 }
 
+.flow-command-grid {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.flow-list,
+.flow-editor {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.flow-editor textarea {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .run-history button {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -438,7 +458,7 @@ button.danger {
 
 .provider-row {
   display: grid;
-  grid-template-columns: minmax(130px, 1fr) minmax(110px, 1fr) minmax(180px, 1.1fr) minmax(160px, 1.2fr) auto;
+  grid-template-columns: minmax(130px, 1fr) minmax(110px, 1fr) minmax(160px, 1fr) minmax(140px, 1.1fr) auto auto;
   gap: 8px;
   align-items: center;
 }
@@ -479,6 +499,10 @@ button.danger {
   }
 
   .run-form {
+    grid-template-columns: 1fr;
+  }
+
+  .flow-command-grid {
     grid-template-columns: 1fr;
   }
 

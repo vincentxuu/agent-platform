@@ -3,6 +3,10 @@
 ### Requirement: Evaluation suites and cases
 The system SHALL define eval suites, eval cases, eval runs, metrics, results, regression cases, and quality gates for flows, steps, skills, artifacts, evidence, and policies.
 
+#### Scenario: Create eval case from run
+- **WHEN** a user converts a failed or corrected run into an eval case
+- **THEN** the system stores the input, expected behavior, linked trace evidence, and review status without automatically adding it to a required suite
+
 #### Scenario: Run skill output eval
 - **WHEN** a skill version is evaluated before publication
 - **THEN** the system executes configured eval cases and records pass/fail results with metric details

@@ -1,7 +1,14 @@
-## ADDED Requirements
+## Purpose
+Define runtime policies, guards, approval controls, loop protection, and escalation records for Agent Gateway.
+
+## Requirements
 
 ### Requirement: Configurable run policies
 The system SHALL support policies for budget, provider allow/deny lists, quality requirements, security permissions, retry behavior, and human approval gates.
+
+#### Scenario: Configure policy version
+- **WHEN** an operator creates or updates a policy draft and publishes it
+- **THEN** the system stores a versioned policy that can be bound to a flow or preset and referenced by future runs
 
 #### Scenario: Apply preset policy
 - **WHEN** a user selects a flow preset before starting a run

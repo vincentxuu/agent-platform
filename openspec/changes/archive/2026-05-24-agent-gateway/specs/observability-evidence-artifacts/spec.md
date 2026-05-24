@@ -17,12 +17,20 @@ The system SHALL derive cost, latency, token, retry, fallback, tool usage, provi
 ### Requirement: Evidence store
 The system SHALL store evidence items linking claims, sources, excerpts, citations, conflicts, confidence, retrieval time, supporting step, and artifact references.
 
+#### Scenario: Review evidence item
+- **WHEN** a user approves, rejects, or annotates an evidence item
+- **THEN** the system records the review decision, reviewer, timestamp, and reason while preserving the original evidence record
+
 #### Scenario: Trace claim to source
 - **WHEN** a user selects a claim in a report artifact
 - **THEN** the system shows the supporting sources, excerpts, citation status, confidence, and conflicts for that claim
 
 ### Requirement: Artifact versioning
 The system SHALL store generated artifacts as versioned outputs linked to runs, steps, evidence, and source inputs.
+
+#### Scenario: Approve or reject artifact
+- **WHEN** a user approves or rejects an artifact version
+- **THEN** the system records the decision, reviewer, timestamp, and linked evidence state without deleting prior versions
 
 #### Scenario: Regenerate artifact
 - **WHEN** a user regenerates a report from a step output

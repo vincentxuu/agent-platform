@@ -9,6 +9,7 @@ export type LocalPlatformPaths = {
   webRoot: string;
   localStateDir: string;
   runStorePath: string;
+  flowStorePath: string;
   configStorePath: string;
   wranglerPath: string;
   migrationsDir: string;
@@ -32,6 +33,7 @@ export function createLocalPlatformPaths(options: {
     webRoot: join(cwd, "apps/web/dist"),
     localStateDir,
     runStorePath: join(localStateDir, "agent-platform-runs.json"),
+    flowStorePath: join(localStateDir, "agent-platform-flows.json"),
     configStorePath: join(localStateDir, "agent-platform-config.json"),
     wranglerPath: join(cwd, "wrangler.toml"),
     migrationsDir: join(cwd, "packages/db/migrations"),

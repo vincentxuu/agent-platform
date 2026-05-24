@@ -41,9 +41,10 @@ worker.stderr.on("data", (chunk) => {
 try {
   await waitForWorker();
   await assertReadiness();
+  const customFlowId = await assertFlowDefineCommands();
   await assertConfigEditing();
   await assertValidation();
-  const runId = await assertRunLifecycle();
+  const runId = await assertRunLifecycle(customFlowId);
   await assertArtifact(runId);
   await assertEvidenceReviewAndRegeneration(runId);
   await assertRetryCancelDelete(runId);
@@ -115,6 +116,16 @@ async function assertConfigEditing() {
     throw new Error("Expected Worker skill version update to persist");
   }
 
+  const skillEval = await requestJson("/api/skills/research-planner/evals", { method: "POST" });
+  if (skillEval.status !== 200 || skillEval.body.eval?.passed !== true) {
+    throw new Error("Expected Worker skill eval command to pass for enabled skill");
+  }
+
+  const disabledSkill = await requestJson("/api/skills/research-planner", { method: "DELETE" });
+  if (disabledSkill.status !== 200 || disabledSkill.body.skill?.enabled !== false) {
+    throw new Error("Expected Worker skill delete command to disable skill");
+  }
+
   const draftSkill = await requestJson("/api/skills", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -122,6 +133,66 @@ async function assertConfigEditing() {
   });
   if (draftSkill.status !== 201 || !draftSkill.body.skills?.some((skill) => skill.id === "worker-custom-checker" && skill.source === "draft")) {
     throw new Error("Expected Worker draft skill creation");
+  }
+
+  const provider = await requestJson("/api/providers", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: "worker-custom-provider", name: "Worker Custom Provider", enabled: false, credentialRef: "WORKER_CUSTOM_KEY", models: ["worker-model"], activeModel: "worker-model" })
+  });
+  if (provider.status !== 201 || provider.body.provider?.id !== "worker-custom-provider") {
+    throw new Error("Expected Worker provider creation");
+  }
+
+  const enabledProvider = await requestJson("/api/providers/worker-custom-provider", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ enabled: true, activeModel: "worker-model" })
+  });
+  if (enabledProvider.status !== 200 || enabledProvider.body.provider?.enabled !== true) {
+    throw new Error("Expected Worker provider update to enable provider");
+  }
+
+  const disabledProvider = await requestJson("/api/providers/worker-custom-provider", { method: "DELETE" });
+  if (disabledProvider.status !== 200 || disabledProvider.body.provider?.enabled !== false) {
+    throw new Error("Expected Worker provider delete command to disable provider");
+  }
+
+  const createdPolicy = await requestJson("/api/policies", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      id: "worker-check-policy",
+      name: "Worker Check Policy",
+      draft: {
+        maxCostUsd: 1.75,
+        maxIterations: 4,
+        citationRequired: true,
+        allowedProviders: ["workers_ai", "search"]
+      }
+    })
+  });
+  if (createdPolicy.status !== 201 || createdPolicy.body.policy?.id !== "worker-check-policy") {
+    throw new Error("Expected Worker policy draft creation");
+  }
+
+  const updatedPolicy = await requestJson("/api/policies/worker-check-policy", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ draft: { maxCostUsd: 2.25, maxIterations: 6, citationRequired: false, allowedProviders: ["workers_ai"] } })
+  });
+  if (updatedPolicy.status !== 200 || updatedPolicy.body.policy?.draft?.maxCostUsd !== 2.25) {
+    throw new Error("Expected Worker policy draft update");
+  }
+
+  const publishedPolicy = await requestJson("/api/policies/worker-check-policy/versions", { method: "POST" });
+  if (publishedPolicy.status !== 201 || publishedPolicy.body.policy?.version !== 1) {
+    throw new Error("Expected Worker policy publication");
+  }
+
+  const appliedPolicy = await requestJson("/api/policies/worker-check-policy/apply", { method: "POST" });
+  if (appliedPolicy.status !== 200 || appliedPolicy.body.config?.policy?.allowedProviders?.[0] !== "workers_ai") {
+    throw new Error("Expected Worker policy apply-to-flow command");
   }
 }
 
@@ -143,8 +214,43 @@ async function assertValidation() {
   }
 }
 
-async function assertRunLifecycle() {
-  const created = await postJson("/api/runs", {
+async function assertFlowDefineCommands() {
+  const initial = await getJson("/api/flows");
+  if (!initial.flows.some((flow) => flow.id === "deep_research")) {
+    throw new Error("Expected Worker flows endpoint to include Deep Research");
+  }
+
+  const clone = await postJson("/api/flows/deep_research/clone", { id: "worker_check_flow", name: "Worker Check Flow" });
+  if (clone.status !== 201 || clone.body.flow?.id !== "worker_check_flow" || !clone.body.flow.hasDraft) {
+    throw new Error(`Expected Worker flow clone command to create a draft: ${JSON.stringify(clone.body)}`);
+  }
+
+  const definition = clone.body.flow.draft || clone.body.flow.definition;
+  definition.name = "Worker Check Flow Updated";
+  const updated = await requestJson("/api/flows/worker_check_flow", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ definition })
+  });
+  if (updated.status !== 200 || updated.body.validation?.length !== 0 || !updated.body.flow.hasDraft) {
+    throw new Error(`Expected Worker flow draft update to validate cleanly: ${JSON.stringify(updated.body)}`);
+  }
+
+  const published = await requestJson("/api/flows/worker_check_flow/versions", { method: "POST" });
+  if (published.status !== 201 || published.body.version !== 1 || published.body.flow.status !== "published") {
+    throw new Error(`Expected Worker flow publish command to create v1: ${JSON.stringify(published.body)}`);
+  }
+
+  const detail = await getJson("/api/flows/worker_check_flow");
+  if (detail.flow.version !== 1 || detail.flow.hasDraft !== false) {
+    throw new Error("Expected Worker published flow detail to expose v1 without a draft");
+  }
+
+  return "worker_check_flow";
+}
+
+async function assertRunLifecycle(flowId = "deep_research") {
+  const created = await postJson(`/api/flows/${flowId}/runs`, {
     presetId: "standard",
     inputs: {
       topic: "wrangler dev worker smoke",
@@ -220,6 +326,22 @@ async function assertEvidenceReviewAndRegeneration(runId) {
   if (reviewed.status !== 200 || reviewed.body.run?.evidence?.[0]?.review?.status !== "accepted") {
     throw new Error(`Expected Worker evidence review to be saved on the run: ${JSON.stringify(reviewed.body)}`);
   }
+  const rejected = await requestJson(`/api/runs/${runId}/evidence/1`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ status: "rejected", note: "reject this worker evidence" })
+  });
+  if (rejected.status !== 200 || rejected.body.run?.evidence?.[1]?.review?.status !== "rejected") {
+    throw new Error("Expected Worker evidence reject command to be saved on the run");
+  }
+  const annotated = await requestJson(`/api/runs/${runId}/evidence/2`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ status: "watch", note: "worker follow-up annotation" })
+  });
+  if (annotated.status !== 200 || annotated.body.run?.evidence?.[2]?.review?.note !== "worker follow-up annotation") {
+    throw new Error("Expected Worker evidence annotation command to be saved on the run");
+  }
 
   const regenerated = await requestJson(`/api/runs/${runId}/artifacts/regenerate`, { method: "POST" });
   if (regenerated.status !== 200 || !regenerated.body.run?.artifacts?.some((artifact) => artifact.id === "review_summary")) {
@@ -228,7 +350,7 @@ async function assertEvidenceReviewAndRegeneration(runId) {
 
   const summaryResponse = await fetch(`${baseUrl}/api/runs/${runId}/artifacts/review_summary`);
   const summary = await summaryResponse.json();
-  if (!summaryResponse.ok || summary.reviewedCount !== 1 || summary.acceptedCount !== 1) {
+  if (!summaryResponse.ok || summary.reviewedCount !== 3 || summary.acceptedCount !== 1 || summary.rejectedCount !== 1) {
     throw new Error("Expected Worker review summary artifact from R2");
   }
 
@@ -245,14 +367,35 @@ async function assertEvidenceReviewAndRegeneration(runId) {
     throw new Error(`Expected Worker artifact edit to create version 2: ${JSON.stringify(edited.body)}`);
   }
 
+  const approvedArtifact = await requestJson(`/api/runs/${runId}/artifacts/review_summary`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      content: { ...summary, review: { status: "accepted" } },
+      note: "approve worker review summary"
+    })
+  });
+  if (approvedArtifact.status !== 200 || approvedArtifact.body.artifact?.version !== 3) {
+    throw new Error("Expected Worker artifact approve command to create a reviewed version");
+  }
+
   const versions = await requestJson(`/api/runs/${runId}/artifacts/review_summary/versions`);
-  if (versions.status !== 200 || !Array.isArray(versions.body.versions) || versions.body.versions.length !== 2) {
-    throw new Error("Expected Worker artifact versions endpoint to list two versions");
+  if (versions.status !== 200 || !Array.isArray(versions.body.versions) || versions.body.versions.length !== 3) {
+    throw new Error("Expected Worker artifact versions endpoint to list three versions");
   }
 
   const diff = await requestJson(`/api/runs/${runId}/artifacts/review_summary/diff`);
   if (diff.status !== 200 || !Array.isArray(diff.body.diff?.lines) || diff.body.diff.lines.length === 0) {
     throw new Error("Expected Worker artifact diff endpoint to return changed lines");
+  }
+
+  const improvement = await requestJson("/api/improvements", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sourceRunId: runId, type: "eval-case", summary: "Create Worker regression case from corrected run" })
+  });
+  if (improvement.status !== 201 || improvement.body.proposal?.evalCase?.sourceRunId !== runId) {
+    throw new Error("Expected Worker improvement proposal command to create a draft eval case from run feedback");
   }
 }
 

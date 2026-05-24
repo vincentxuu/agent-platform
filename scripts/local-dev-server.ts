@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { createReadStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { deepResearchFlow } from "../packages/core/src/deep-research-flow.js";
-import { validateFlowInputs } from "../packages/core/src/flow.js";
+import { validateFlowDefinition, validateFlowInputs } from "../packages/core/src/flow.js";
 import { InMemoryFlowRuntime } from "../packages/runtime/src/flow-runtime.js";
 import {
   DEFAULT_ALLOWED_PROVIDER_IDS,
@@ -17,6 +17,21 @@ import {
 } from "../packages/local/src/adapter.js";
 
 type JsonRecord = Record<string, unknown>;
+type FlowDefinition = typeof deepResearchFlow;
+
+type LocalFlowRecord = {
+  id: string;
+  status: "seed" | "draft" | "published" | "archived";
+  source: "built-in" | "user";
+  draft?: FlowDefinition;
+  versions: Array<{
+    version: number;
+    flow: FlowDefinition;
+    publishedAt: string;
+  }>;
+  createdAt: string;
+  updatedAt: string;
+};
 
 type LocalRunView = {
   id: string;
@@ -72,6 +87,7 @@ type LocalResearchSource = {
 type ManagementConfig = {
   flow: {
     id: string;
+    policyRef?: string;
     defaultPreset: string;
     defaultAudience: string;
     defaultFreshnessDays: number;
@@ -82,6 +98,8 @@ type ManagementConfig = {
     citationRequired: boolean;
     allowedProviders: string[];
   };
+  policies: ManagedPolicy[];
+  improvementProposals: ManagedImprovementProposal[];
   providers: Array<{
     id: string;
     name: string;
@@ -91,6 +109,40 @@ type ManagementConfig = {
     activeModel: string;
   }>;
   skills: ManagedSkill[];
+};
+
+type ManagedPolicy = {
+  id: string;
+  name: string;
+  status: "draft" | "published" | "archived";
+  version: number;
+  draft: {
+    maxCostUsd: number;
+    maxIterations: number;
+    citationRequired: boolean;
+    allowedProviders: string[];
+  };
+  versions: Array<{
+    version: number;
+    publishedAt: string;
+    config: ManagedPolicy["draft"];
+  }>;
+};
+
+type ManagedImprovementProposal = {
+  id: string;
+  type: "eval-case" | "skill" | "policy" | "memory";
+  status: "review";
+  sourceRunId?: string;
+  summary: string;
+  evalCase: {
+    id: string;
+    sourceRunId?: string;
+    input: Record<string, unknown>;
+    expected: Record<string, unknown>;
+    status: "draft";
+  };
+  createdAt: string;
 };
 
 type ManagedSkill = {
@@ -111,6 +163,7 @@ const {
   webRoot,
   localStateDir,
   runStorePath,
+  flowStorePath,
   configStorePath,
   localSourcesPath
 } = paths;
@@ -126,7 +179,9 @@ const runtime = new InMemoryFlowRuntime({
 
 const runViews = new Map<string, LocalRunView>();
 const runTimers = new Map<string, Array<NodeJS.Timeout>>();
+const flowRecords = new Map<string, LocalFlowRecord>();
 loadRunStore();
+loadFlowStore();
 let managementConfig = loadManagementConfig();
 
 const server = createServer(async (request, response) => {
@@ -138,7 +193,57 @@ const server = createServer(async (request, response) => {
     }
 
     if (url.pathname === "/api/flows" && request.method === "GET") {
-      return sendJson(response, { flows: [deepResearchFlow] });
+      return sendJson(response, { flows: listLocalFlows() });
+    }
+
+    if (url.pathname === "/api/flows" && request.method === "POST") {
+      const body = await readJson(request);
+      const result = createFlowDraft(body);
+      if (!result.flow) return sendJson(response, { error: result.error, details: (result as any).details }, result.status);
+      return sendJson(response, result, 201);
+    }
+
+    const flowRunMatch = url.pathname.match(/^\/api\/flows\/([^/]+)\/runs$/);
+    if (flowRunMatch && request.method === "POST") {
+      const body = await readJson(request);
+      const result = createFlowRun(flowRunMatch[1], body);
+      if (!result.run) return sendJson(response, { error: result.error, details: (result as any).details }, result.status);
+      return sendJson(response, result, 202);
+    }
+
+    const flowCloneMatch = url.pathname.match(/^\/api\/flows\/([^/]+)\/clone$/);
+    if (flowCloneMatch && request.method === "POST") {
+      const body = await readJson(request);
+      const result = cloneFlowDraft(flowCloneMatch[1], body);
+      if (!result.flow) return sendJson(response, { error: result.error, details: (result as any).details }, result.status);
+      return sendJson(response, result, 201);
+    }
+
+    const flowVersionMatch = url.pathname.match(/^\/api\/flows\/([^/]+)\/versions$/);
+    if (flowVersionMatch && request.method === "POST") {
+      const result = publishFlowDraft(flowVersionMatch[1]);
+      if (!result.flow) return sendJson(response, { error: result.error, details: (result as any).details }, result.status);
+      return sendJson(response, result, 201);
+    }
+
+    const flowMatch = url.pathname.match(/^\/api\/flows\/([^/]+)$/);
+    if (flowMatch && request.method === "GET") {
+      const flow = getFlowDetail(flowMatch[1]);
+      if (!flow) return sendJson(response, { error: "Flow not found" }, 404);
+      return sendJson(response, { flow });
+    }
+
+    if (flowMatch && request.method === "PATCH") {
+      const body = await readJson(request);
+      const result = updateFlowDraft(flowMatch[1], body);
+      if (!result.flow) return sendJson(response, { error: result.error, details: (result as any).details }, result.status);
+      return sendJson(response, result);
+    }
+
+    if (flowMatch && request.method === "DELETE") {
+      const result = deleteOrArchiveFlow(flowMatch[1]);
+      if (!result.flow && !result.deleted) return sendJson(response, { error: result.error }, result.status);
+      return sendJson(response, result);
     }
 
     if (url.pathname === "/api/readiness" && request.method === "GET") {
@@ -162,6 +267,76 @@ const server = createServer(async (request, response) => {
       return sendJson(response, { skills: managementConfig.skills, bindings: createSkillBindings() });
     }
 
+    if (url.pathname === "/api/providers" && request.method === "GET") {
+      return sendJson(response, { providers: managementConfig.providers });
+    }
+
+    if (url.pathname === "/api/policies" && request.method === "GET") {
+      return sendJson(response, { policies: managementConfig.policies });
+    }
+
+    if (url.pathname === "/api/policies" && request.method === "POST") {
+      const body = await readJson(request);
+      const result = createManagedPolicy(body);
+      if (!result.policy) return sendJson(response, { error: result.error }, result.status);
+      return sendJson(response, { policy: result.policy, policies: managementConfig.policies }, 201);
+    }
+
+    const policyVersionMatch = url.pathname.match(/^\/api\/policies\/([^/]+)\/versions$/);
+    if (policyVersionMatch && request.method === "POST") {
+      const result = publishManagedPolicy(policyVersionMatch[1]);
+      if (!result.policy) return sendJson(response, { error: result.error }, result.status);
+      return sendJson(response, result, 201);
+    }
+
+    const policyApplyMatch = url.pathname.match(/^\/api\/policies\/([^/]+)\/apply$/);
+    if (policyApplyMatch && request.method === "POST") {
+      const result = applyManagedPolicy(policyApplyMatch[1]);
+      if (!result.policy) return sendJson(response, { error: result.error }, result.status);
+      return sendJson(response, result);
+    }
+
+    const policyMatch = url.pathname.match(/^\/api\/policies\/([^/]+)$/);
+    if (policyMatch && request.method === "PATCH") {
+      const body = await readJson(request);
+      const result = updateManagedPolicy(policyMatch[1], body);
+      if (!result.policy) return sendJson(response, { error: result.error }, result.status);
+      return sendJson(response, { policy: result.policy, policies: managementConfig.policies });
+    }
+
+    if (policyMatch && request.method === "DELETE") {
+      const result = archiveManagedPolicy(policyMatch[1]);
+      if (!result.policy) return sendJson(response, { error: result.error }, result.status);
+      return sendJson(response, { policy: result.policy, policies: managementConfig.policies });
+    }
+
+    if (url.pathname === "/api/improvements" && request.method === "POST") {
+      const body = await readJson(request);
+      const result = createImprovementProposal(body);
+      return sendJson(response, { proposal: result.proposal, proposals: managementConfig.improvementProposals }, 201);
+    }
+
+    if (url.pathname === "/api/providers" && request.method === "POST") {
+      const body = await readJson(request);
+      const result = createManagedProvider(body);
+      if (!result.provider) return sendJson(response, { error: result.error }, result.status);
+      return sendJson(response, { provider: result.provider, providers: managementConfig.providers }, 201);
+    }
+
+    const providerMatch = url.pathname.match(/^\/api\/providers\/([^/]+)$/);
+    if (providerMatch && request.method === "PATCH") {
+      const body = await readJson(request);
+      const result = updateManagedProvider(providerMatch[1], body);
+      if (!result.provider) return sendJson(response, { error: result.error }, result.status);
+      return sendJson(response, { provider: result.provider, providers: managementConfig.providers });
+    }
+
+    if (providerMatch && request.method === "DELETE") {
+      const result = updateManagedProvider(providerMatch[1], { enabled: false });
+      if (!result.provider) return sendJson(response, { error: result.error }, result.status);
+      return sendJson(response, { provider: result.provider, providers: managementConfig.providers });
+    }
+
     if (url.pathname === "/api/skills" && request.method === "POST") {
       const body = await readJson(request);
       const result = createManagedSkill(body);
@@ -175,6 +350,19 @@ const server = createServer(async (request, response) => {
       const result = updateManagedSkill(skillMatch[1], body);
       if (!result.skill) return sendJson(response, { error: result.error }, result.status);
       return sendJson(response, { skill: result.skill, skills: managementConfig.skills });
+    }
+
+    if (skillMatch && request.method === "DELETE") {
+      const result = updateManagedSkill(skillMatch[1], { enabled: false });
+      if (!result.skill) return sendJson(response, { error: result.error }, result.status);
+      return sendJson(response, { skill: result.skill, skills: managementConfig.skills });
+    }
+
+    const skillEvalMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/evals$/);
+    if (skillEvalMatch && request.method === "POST") {
+      const result = runManagedSkillEval(skillEvalMatch[1]);
+      if (!result.eval) return sendJson(response, { error: result.error }, result.status);
+      return sendJson(response, result);
     }
 
     const providerTestMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/test$/);
@@ -194,11 +382,8 @@ const server = createServer(async (request, response) => {
 
     if (url.pathname === "/api/runs" && request.method === "POST") {
       const body = await readJson(request);
-      const validation = validateRunRequest(body);
-      if (validation.errors.length > 0) {
-        return sendJson(response, { error: "Invalid run request", details: validation.errors }, 400);
-      }
-      const result = createLocalRun(body);
+      const result = createFlowRun(typeof body.flowId === "string" ? body.flowId : managementConfig.flow.id, body);
+      if (!result.run) return sendJson(response, { error: result.error, details: result.details }, result.status);
       return sendJson(response, result, 202);
     }
 
@@ -233,7 +418,9 @@ const server = createServer(async (request, response) => {
     if (retryMatch && request.method === "POST") {
       const body = await readJson(request);
       const stepId = typeof body.stepId === "string" ? body.stepId : undefined;
-      if (stepId && !deepResearchFlow.steps.some((step) => step.id === stepId)) {
+      const existingRun = runViews.get(retryMatch[1]);
+      const flow = existingRun ? getFlowForRun(existingRun) : undefined;
+      if (stepId && flow && !flow.steps.some((step) => step.id === stepId)) {
         return sendJson(response, { error: "Invalid retry request", details: [`Unknown stepId: ${stepId}`] }, 400);
       }
       const run = retryLocalRunStep(retryMatch[1], stepId);
@@ -295,11 +482,239 @@ server.listen(port, "127.0.0.1", () => {
   console.log(`local dev server listening on http://127.0.0.1:${port}`);
 });
 
+function listLocalFlows() {
+  return [...flowRecords.values()].map((record) => serializeFlowRecord(record));
+}
+
+function getFlowDetail(flowId: string) {
+  const record = flowRecords.get(flowId);
+  return record ? serializeFlowRecord(record, true) : undefined;
+}
+
+function createFlowDraft(body: JsonRecord) {
+  const base = normalizeFlowDefinition({
+    ...deepResearchFlow,
+    id: sanitizeFlowId(typeof body.id === "string" ? body.id : typeof body.name === "string" ? body.name : "custom_flow"),
+    name: typeof body.name === "string" && body.name.trim() ? body.name.trim().slice(0, 100) : "Custom Flow",
+    description: typeof body.description === "string" ? body.description.slice(0, 300) : "Custom workflow draft.",
+    version: 0
+  });
+  if (!base.id) return { status: 400, error: "Flow id is required" };
+  if (flowRecords.has(base.id)) return { status: 409, error: "Flow already exists" };
+  const now = new Date().toISOString();
+  const record: LocalFlowRecord = {
+    id: base.id,
+    status: "draft",
+    source: "user",
+    draft: base,
+    versions: [],
+    createdAt: now,
+    updatedAt: now
+  };
+  flowRecords.set(record.id, record);
+  persistFlowStore();
+  return { status: 201, flow: serializeFlowRecord(record, true) };
+}
+
+function cloneFlowDraft(flowId: string, body: JsonRecord) {
+  const source = resolveFlowDraftOrVersion(flowId);
+  if (!source) return { status: 404, error: "Source flow not found" };
+  const cloneId = sanitizeFlowId(typeof body.id === "string" ? body.id : `${source.id}_copy`);
+  if (!cloneId) return { status: 400, error: "Clone id is required" };
+  if (flowRecords.has(cloneId)) return { status: 409, error: "Flow already exists" };
+  const now = new Date().toISOString();
+  const draft = normalizeFlowDefinition({
+    ...source,
+    id: cloneId,
+    name: typeof body.name === "string" && body.name.trim() ? body.name.trim().slice(0, 100) : `${source.name} Copy`,
+    description: typeof body.description === "string" ? body.description.slice(0, 300) : source.description,
+    version: 0
+  });
+  const record: LocalFlowRecord = {
+    id: cloneId,
+    status: "draft",
+    source: "user",
+    draft,
+    versions: [],
+    createdAt: now,
+    updatedAt: now
+  };
+  flowRecords.set(record.id, record);
+  persistFlowStore();
+  return { status: 201, flow: serializeFlowRecord(record, true) };
+}
+
+function updateFlowDraft(flowId: string, body: JsonRecord) {
+  const record = flowRecords.get(flowId);
+  if (!record) return { status: 404, error: "Flow not found" };
+  if (record.source === "built-in") return { status: 409, error: "Built-in flow must be cloned before editing" };
+  const current = record.draft || record.versions.at(-1)?.flow;
+  if (!current) return { status: 404, error: "Flow draft not found" };
+  const draft = normalizeFlowDefinition({
+    ...current,
+    ...(typeof body.definition === "object" && body.definition !== null ? body.definition as JsonRecord : {}),
+    id: record.id,
+    name: typeof body.name === "string" ? body.name.slice(0, 100) : (body.definition as any)?.name || current.name,
+    description: typeof body.description === "string" ? body.description.slice(0, 300) : (body.definition as any)?.description || current.description,
+    inputs: Array.isArray(body.inputs) ? body.inputs : (body.definition as any)?.inputs || current.inputs,
+    presets: Array.isArray(body.presets) ? body.presets : (body.definition as any)?.presets || current.presets,
+    steps: Array.isArray(body.steps) ? body.steps : (body.definition as any)?.steps || current.steps,
+    edges: Array.isArray(body.edges) ? body.edges : (body.definition as any)?.edges || current.edges,
+    artifacts: Array.isArray(body.artifacts) ? body.artifacts : (body.definition as any)?.artifacts || current.artifacts,
+    version: 0
+  });
+  record.draft = draft;
+  record.status = "draft";
+  record.updatedAt = new Date().toISOString();
+  persistFlowStore();
+  return { status: 200, flow: serializeFlowRecord(record, true), validation: validateDraft(draft) };
+}
+
+function publishFlowDraft(flowId: string) {
+  const record = flowRecords.get(flowId);
+  if (!record) return { status: 404, error: "Flow not found" };
+  if (record.source === "built-in") return { status: 409, error: "Built-in flow is already published" };
+  if (!record.draft) return { status: 400, error: "Flow has no draft to publish" };
+  const errors = validateDraft(record.draft);
+  if (errors.length > 0) return { status: 400, error: "Flow draft is invalid", details: errors };
+  const version = Math.max(0, ...record.versions.map((item) => item.version)) + 1;
+  const now = new Date().toISOString();
+  const flow = normalizeFlowDefinition({ ...record.draft, version });
+  record.versions.push({ version, flow, publishedAt: now });
+  record.status = "published";
+  record.draft = undefined;
+  record.updatedAt = now;
+  persistFlowStore();
+  return { status: 201, flow: serializeFlowRecord(record, true), version };
+}
+
+function deleteOrArchiveFlow(flowId: string) {
+  const record = flowRecords.get(flowId);
+  if (!record) return { status: 404, error: "Flow not found" };
+  if (record.source === "built-in") return { status: 409, error: "Built-in flow cannot be deleted" };
+  const hasRuns = [...runViews.values()].some((run) => run.flowId === flowId);
+  if (!hasRuns && record.versions.length === 0) {
+    flowRecords.delete(flowId);
+    persistFlowStore();
+    return { status: 200, deleted: flowId };
+  }
+  record.status = "archived";
+  record.updatedAt = new Date().toISOString();
+  persistFlowStore();
+  return { status: 200, flow: serializeFlowRecord(record, true) };
+}
+
+function resolveRunnableFlow(flowId: string, version?: number): FlowDefinition | undefined {
+  const record = flowRecords.get(flowId);
+  if (!record || record.status === "archived") return undefined;
+  if (version !== undefined) return record.versions.find((item) => item.version === version)?.flow;
+  return record.versions.at(-1)?.flow || (record.source === "built-in" ? record.versions[0]?.flow : undefined);
+}
+
+function resolveFlowDraftOrVersion(flowId: string): FlowDefinition | undefined {
+  const record = flowRecords.get(flowId);
+  return record?.draft || record?.versions.at(-1)?.flow;
+}
+
+function getFlowForRun(run: LocalRunView): FlowDefinition {
+  return resolveRunnableFlow(run.flowId) || deepResearchFlow;
+}
+
+function serializeFlowRecord(record: LocalFlowRecord, includeDefinition = false) {
+  const current = record.draft || record.versions.at(-1)?.flow;
+  return {
+    id: record.id,
+    name: current?.name || record.id,
+    description: current?.description || "",
+    status: record.status,
+    source: record.source,
+    version: current?.version ?? 0,
+    versions: record.versions.map((item) => ({ version: item.version, publishedAt: item.publishedAt })),
+    hasDraft: Boolean(record.draft),
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    presets: current?.presets || [],
+    steps: current?.steps || [],
+    artifacts: current?.artifacts || [],
+    definition: includeDefinition ? current : undefined,
+    draft: includeDefinition ? record.draft : undefined
+  };
+}
+
+function normalizeFlowDefinition(input: any): FlowDefinition {
+  return {
+    id: sanitizeFlowId(input.id),
+    name: String(input.name || "Untitled Flow").slice(0, 100),
+    version: Number.isInteger(input.version) ? input.version : 0,
+    description: typeof input.description === "string" ? input.description.slice(0, 300) : "",
+    inputs: Array.isArray(input.inputs) ? input.inputs : [],
+    presets: Array.isArray(input.presets) ? input.presets : [],
+    steps: Array.isArray(input.steps) ? input.steps : [],
+    edges: Array.isArray(input.edges) ? input.edges : [],
+    artifacts: Array.isArray(input.artifacts) ? input.artifacts : []
+  } as FlowDefinition;
+}
+
+function validateDraft(flow: FlowDefinition) {
+  return validateFlowDefinition({ ...flow, version: Number.isInteger(flow.version) && flow.version > 0 ? flow.version : 1 });
+}
+
+function sanitizeFlowId(value: unknown) {
+  if (typeof value !== "string") return "";
+  return value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "").slice(0, 64);
+}
+
+function loadFlowStore() {
+  const now = new Date().toISOString();
+  flowRecords.set(deepResearchFlow.id, {
+    id: deepResearchFlow.id,
+    status: "seed",
+    source: "built-in",
+    versions: [{ version: deepResearchFlow.version, flow: deepResearchFlow, publishedAt: now }],
+    createdAt: now,
+    updatedAt: now
+  });
+  if (!existsSync(flowStorePath)) return;
+  try {
+    const stored = JSON.parse(readFileSync(flowStorePath, "utf8")) as { flows?: LocalFlowRecord[] };
+    for (const record of stored.flows || []) {
+      if (!record.id || record.source === "built-in") continue;
+      flowRecords.set(record.id, {
+        ...record,
+        versions: Array.isArray(record.versions) ? record.versions : []
+      });
+    }
+  } catch (error) {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const corruptPath = `${flowStorePath}.corrupt-${timestamp}`;
+    renameSync(flowStorePath, corruptPath);
+    console.warn(`Local flow store was unreadable and has been moved to ${corruptPath}`);
+  }
+}
+
+function persistFlowStore() {
+  mkdirSync(localStateDir, { recursive: true });
+  const flows = [...flowRecords.values()].filter((record) => record.source !== "built-in");
+  const tempPath = `${flowStorePath}.tmp`;
+  writeFileSync(tempPath, JSON.stringify({ version: 1, flows }, null, 2));
+  renameSync(tempPath, flowStorePath);
+}
+
 function createLocalRun(body: JsonRecord) {
+  return createFlowRun(typeof body.flowId === "string" ? body.flowId : managementConfig.flow.id, body);
+}
+
+function createFlowRun(flowId: string, body: JsonRecord) {
+  const flow = resolveRunnableFlow(flowId, typeof body.version === "number" ? body.version : undefined);
+  if (!flow) return { status: 404, error: "Runnable flow not found" };
   const inputs = readInputs(body);
   const presetId = typeof body.presetId === "string" ? body.presetId : "standard";
-  const run = runtime.createRun({ flow: deepResearchFlow, presetId, inputs });
-  const currentStepId = run.currentStepIds[0] || deepResearchFlow.steps[0].id;
+  const validation = validateRunRequestForFlow(flow, body);
+  if (validation.errors.length > 0) {
+    return { status: 400, error: "Invalid run request", details: validation.errors };
+  }
+  const run = runtime.createRun({ flow, presetId, inputs });
+  const currentStepId = run.currentStepIds[0] || flow.steps[0].id;
   const firstStep = [...(runtime as any).stepRuns.values()].find((stepRun: any) => stepRun.runId === run.id && stepRun.stepId === currentStepId);
 
   if (!firstStep) {
@@ -317,7 +732,7 @@ function createLocalRun(body: JsonRecord) {
     freshnessDays: Number(inputs.freshness_days || 365),
     createdAt: run.createdAt,
     updatedAt: run.createdAt,
-    timeline: deepResearchFlow.steps.map((step) => ({
+    timeline: flow.steps.map((step) => ({
       stepId: step.id,
       status: step.id === currentStepId ? "pending" : "waiting",
       attempt: 1
@@ -358,17 +773,22 @@ function createLocalRun(body: JsonRecord) {
 }
 
 function validateRunRequest(body: JsonRecord) {
+  const flow = resolveRunnableFlow(typeof body.flowId === "string" ? body.flowId : managementConfig.flow.id);
+  return flow ? validateRunRequestForFlow(flow, body) : { errors: ["Runnable flow not found"] };
+}
+
+function validateRunRequestForFlow(flow: FlowDefinition, body: JsonRecord) {
   const errors: string[] = [];
   const presetId = typeof body.presetId === "string" ? body.presetId : "standard";
   const inputs = readInputs(body);
 
-  if (!deepResearchFlow.presets.some((preset) => preset.id === presetId)) {
+  if (!flow.presets.some((preset) => preset.id === presetId)) {
     errors.push(`Unknown presetId: ${presetId}`);
   }
 
-  errors.push(...validateFlowInputs(deepResearchFlow, inputs));
+  errors.push(...validateFlowInputs(flow, inputs));
 
-  if (inputs.freshness_days <= 0 || !Number.isFinite(inputs.freshness_days)) {
+  if (Object.prototype.hasOwnProperty.call(inputs, "freshness_days") && inputs.freshness_days <= 0 || !Number.isFinite(inputs.freshness_days)) {
     errors.push("Input freshness_days must be a positive number");
   }
 
@@ -419,6 +839,7 @@ function defaultManagementConfig(): ManagementConfig {
   return {
     flow: {
       id: "deep_research",
+      policyRef: "standard-research",
       defaultPreset: "standard",
       defaultAudience: "工程管理者",
       defaultFreshnessDays: 365
@@ -429,6 +850,8 @@ function defaultManagementConfig(): ManagementConfig {
       citationRequired: true,
       allowedProviders: DEFAULT_ALLOWED_PROVIDER_IDS
     },
+    policies: [defaultManagedPolicy()],
+    improvementProposals: [],
     providers: createProviderConfigs(process.env, { localWorkersAiReady: true }),
     skills: builtInSkills()
   };
@@ -458,16 +881,15 @@ function normalizeManagementConfig(input: Partial<ManagementConfig>): Management
   const fallback = defaultManagementConfig();
   const providerById = new Map(fallback.providers.map((provider) => [provider.id, provider]));
   for (const provider of input.providers || []) {
-    if (!provider?.id || !providerById.has(provider.id)) continue;
-    providerById.set(provider.id, {
-      ...providerById.get(provider.id)!,
-      enabled: Boolean(provider.enabled),
-      credentialRef: typeof provider.credentialRef === "string" ? provider.credentialRef.slice(0, 120) : providerById.get(provider.id)!.credentialRef,
-      activeModel: typeof provider.activeModel === "string" && providerById.get(provider.id)!.models.includes(provider.activeModel)
-        ? provider.activeModel
-        : providerById.get(provider.id)!.activeModel
+    const normalized = normalizeManagedProvider(provider, providerById.get(provider.id));
+    if (!normalized) continue;
+    providerById.set(normalized.id, {
+      ...(providerById.get(normalized.id) || normalized),
+      ...normalized,
+      activeModel: normalized.models.includes(normalized.activeModel) ? normalized.activeModel : normalized.models[0]
     });
   }
+  const allowedProviderIds = new Set(providerById.keys());
   const skillById = new Map(fallback.skills.map((skill) => [skill.id, skill]));
   for (const skill of input.skills || []) {
     const normalized = normalizeManagedSkill(skill, skillById.get(skill.id));
@@ -476,6 +898,7 @@ function normalizeManagementConfig(input: Partial<ManagementConfig>): Management
   return {
     flow: {
       id: "deep_research",
+      policyRef: typeof input.flow?.policyRef === "string" ? input.flow.policyRef : fallback.flow.policyRef,
       defaultPreset: typeof input.flow?.defaultPreset === "string" ? input.flow.defaultPreset : fallback.flow.defaultPreset,
       defaultAudience: typeof input.flow?.defaultAudience === "string" ? input.flow.defaultAudience.slice(0, 120) : fallback.flow.defaultAudience,
       defaultFreshnessDays: Number(input.flow?.defaultFreshnessDays || fallback.flow.defaultFreshnessDays)
@@ -485,12 +908,236 @@ function normalizeManagementConfig(input: Partial<ManagementConfig>): Management
       maxIterations: Number(input.policy?.maxIterations ?? fallback.policy.maxIterations),
       citationRequired: Boolean(input.policy?.citationRequired ?? fallback.policy.citationRequired),
       allowedProviders: Array.isArray(input.policy?.allowedProviders)
-        ? input.policy.allowedProviders.filter((id) => providerById.has(id))
+        ? input.policy.allowedProviders.filter((id) => allowedProviderIds.has(id))
         : fallback.policy.allowedProviders
     },
+    policies: normalizeManagedPolicies(input.policies, fallback.policies, [...providerById.keys()]),
+    improvementProposals: normalizeImprovementProposals(input.improvementProposals),
     providers: [...providerById.values()],
     skills: [...skillById.values()]
   };
+}
+
+function defaultManagedPolicy(): ManagedPolicy {
+  const now = new Date().toISOString();
+  const config = {
+    maxCostUsd: 3,
+    maxIterations: 4,
+    citationRequired: true,
+    allowedProviders: DEFAULT_ALLOWED_PROVIDER_IDS
+  };
+  return {
+    id: "standard-research",
+    name: "Standard Research",
+    status: "published",
+    version: 1,
+    draft: config,
+    versions: [{ version: 1, publishedAt: now, config }]
+  };
+}
+
+function normalizeManagedPolicies(input: unknown, fallback: ManagedPolicy[], providerIds: string[]) {
+  const byId = new Map(fallback.map((policy) => [policy.id, policy]));
+  if (Array.isArray(input)) {
+    for (const policy of input) {
+      const normalized = normalizeManagedPolicy(policy, byId.get(policy?.id), providerIds);
+      if (normalized) byId.set(normalized.id, normalized);
+    }
+  }
+  return [...byId.values()];
+}
+
+function normalizeManagedPolicy(input: any, fallback: ManagedPolicy | undefined, providerIds: string[]): ManagedPolicy | undefined {
+  const id = sanitizePolicyId(input?.id || fallback?.id);
+  if (!id) return undefined;
+  const draftSource = input?.draft || input || fallback?.draft || {};
+  const draft = {
+    maxCostUsd: Number(draftSource.maxCostUsd ?? fallback?.draft.maxCostUsd ?? 3),
+    maxIterations: Number(draftSource.maxIterations ?? fallback?.draft.maxIterations ?? 4),
+    citationRequired: Boolean(draftSource.citationRequired ?? fallback?.draft.citationRequired ?? true),
+    allowedProviders: Array.isArray(draftSource.allowedProviders)
+      ? draftSource.allowedProviders.filter((providerId: string) => providerIds.includes(providerId))
+      : fallback?.draft.allowedProviders || DEFAULT_ALLOWED_PROVIDER_IDS
+  };
+  return {
+    id,
+    name: typeof input?.name === "string" ? input.name.slice(0, 80) : fallback?.name || id,
+    status: ["draft", "published", "archived"].includes(input?.status) ? input.status : fallback?.status || "draft",
+    version: Number(input?.version ?? fallback?.version ?? 0),
+    draft,
+    versions: Array.isArray(input?.versions) ? input.versions : fallback?.versions || []
+  };
+}
+
+function createManagedPolicy(body: JsonRecord) {
+  const policy = normalizeManagedPolicy({ ...body, status: "draft", version: 0 }, undefined, managementConfig.providers.map((provider) => provider.id));
+  if (!policy) return { status: 400, error: "Policy id is required" };
+  if (managementConfig.policies.some((candidate) => candidate.id === policy.id)) return { status: 409, error: "Policy already exists" };
+  managementConfig = normalizeManagementConfig({ ...managementConfig, policies: [...managementConfig.policies, policy] });
+  persistManagementConfig();
+  return { status: 201, policy };
+}
+
+function updateManagedPolicy(policyId: string, body: JsonRecord) {
+  const id = sanitizePolicyId(policyId);
+  const existing = managementConfig.policies.find((policy) => policy.id === id);
+  if (!existing) return { status: 404, error: "Policy not found" };
+  const next = normalizeManagedPolicy({ ...existing, ...body, id, status: "draft" }, existing, managementConfig.providers.map((provider) => provider.id));
+  if (!next) return { status: 400, error: "Invalid policy request" };
+  managementConfig = normalizeManagementConfig({ ...managementConfig, policies: managementConfig.policies.map((policy) => policy.id === id ? next : policy) });
+  persistManagementConfig();
+  return { status: 200, policy: next };
+}
+
+function publishManagedPolicy(policyId: string) {
+  const id = sanitizePolicyId(policyId);
+  const existing = managementConfig.policies.find((policy) => policy.id === id);
+  if (!existing) return { status: 404, error: "Policy not found" };
+  const version = existing.version + 1;
+  const next = {
+    ...existing,
+    status: "published" as const,
+    version,
+    versions: [...existing.versions, { version, publishedAt: new Date().toISOString(), config: existing.draft }]
+  };
+  managementConfig = normalizeManagementConfig({ ...managementConfig, policies: managementConfig.policies.map((policy) => policy.id === id ? next : policy) });
+  persistManagementConfig();
+  return { status: 201, policy: next, version };
+}
+
+function applyManagedPolicy(policyId: string) {
+  const id = sanitizePolicyId(policyId);
+  const policy = managementConfig.policies.find((candidate) => candidate.id === id && candidate.status !== "archived");
+  if (!policy) return { status: 404, error: "Policy not found" };
+  managementConfig = normalizeManagementConfig({
+    ...managementConfig,
+    flow: { ...managementConfig.flow, policyRef: id },
+    policy: policy.draft
+  });
+  persistManagementConfig();
+  return { status: 200, policy, config: managementConfig };
+}
+
+function archiveManagedPolicy(policyId: string) {
+  const id = sanitizePolicyId(policyId);
+  const existing = managementConfig.policies.find((policy) => policy.id === id);
+  if (!existing) return { status: 404, error: "Policy not found" };
+  const next = { ...existing, status: "archived" as const };
+  managementConfig = normalizeManagementConfig({ ...managementConfig, policies: managementConfig.policies.map((policy) => policy.id === id ? next : policy) });
+  persistManagementConfig();
+  return { status: 200, policy: next };
+}
+
+function sanitizePolicyId(value: unknown) {
+  if (typeof value !== "string") return "";
+  return value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+}
+
+function normalizeImprovementProposals(input: unknown): ManagedImprovementProposal[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((proposal) => normalizeImprovementProposal(proposal))
+    .filter((proposal): proposal is ManagedImprovementProposal => Boolean(proposal));
+}
+
+function normalizeImprovementProposal(input: any): ManagedImprovementProposal | undefined {
+  const id = typeof input?.id === "string" ? input.id.slice(0, 80) : "";
+  if (!id) return undefined;
+  const type = ["eval-case", "skill", "policy", "memory"].includes(input?.type) ? input.type : "eval-case";
+  const evalCaseId = typeof input?.evalCase?.id === "string" ? input.evalCase.id : `eval_case_${id}`;
+  return {
+    id,
+    type,
+    status: "review",
+    sourceRunId: typeof input?.sourceRunId === "string" ? input.sourceRunId : undefined,
+    summary: typeof input?.summary === "string" ? input.summary.slice(0, 300) : "Review failed or corrected run as a regression case.",
+    evalCase: {
+      id: evalCaseId.slice(0, 100),
+      sourceRunId: typeof input?.evalCase?.sourceRunId === "string" ? input.evalCase.sourceRunId : typeof input?.sourceRunId === "string" ? input.sourceRunId : undefined,
+      input: isRecord(input?.evalCase?.input) ? input.evalCase.input : {},
+      expected: isRecord(input?.evalCase?.expected) ? input.evalCase.expected : {},
+      status: "draft"
+    },
+    createdAt: typeof input?.createdAt === "string" ? input.createdAt : new Date().toISOString()
+  };
+}
+
+function createImprovementProposal(body: JsonRecord) {
+  const sourceRunId = typeof body.sourceRunId === "string" ? body.sourceRunId : undefined;
+  const sourceRun = sourceRunId ? runViews.get(sourceRunId) : undefined;
+  const proposal = normalizeImprovementProposal({
+    id: `improvement_${Date.now().toString(36)}`,
+    type: body.type || "eval-case",
+    sourceRunId,
+    summary: typeof body.summary === "string" ? body.summary : sourceRun ? `Create eval case from ${sourceRun.topic}` : "Create eval case from operator feedback.",
+    evalCase: {
+      id: `eval_case_${Date.now().toString(36)}`,
+      sourceRunId,
+      input: sourceRun ? { topic: sourceRun.topic, audience: sourceRun.audience, presetId: sourceRun.presetId } : isRecord(body.input) ? body.input : {},
+      expected: isRecord(body.expected) ? body.expected : { status: "review-required" }
+    },
+    createdAt: new Date().toISOString()
+  })!;
+  managementConfig = normalizeManagementConfig({
+    ...managementConfig,
+    improvementProposals: [proposal, ...managementConfig.improvementProposals].slice(0, 50)
+  });
+  persistManagementConfig();
+  return { status: 201, proposal };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeManagedProvider(input: any, fallback?: ManagementConfig["providers"][number]) {
+  const id = sanitizeProviderId(input?.id || fallback?.id);
+  if (!id) return undefined;
+  const models = Array.isArray(input?.models) && input.models.length > 0
+    ? input.models.map(String).filter(Boolean).slice(0, 12)
+    : fallback?.models || [typeof input?.activeModel === "string" ? input.activeModel : "default"];
+  const activeModel = typeof input?.activeModel === "string" ? input.activeModel.slice(0, 80) : fallback?.activeModel || models[0];
+  return {
+    id,
+    name: typeof input?.name === "string" ? input.name.slice(0, 80) : fallback?.name || id,
+    enabled: Boolean(input?.enabled ?? fallback?.enabled ?? false),
+    credentialRef: typeof input?.credentialRef === "string" ? input.credentialRef.slice(0, 120) : fallback?.credentialRef || `${id.toUpperCase()}_API_KEY`,
+    models: models.includes(activeModel) ? models : [activeModel, ...models],
+    activeModel
+  };
+}
+
+function createManagedProvider(body: JsonRecord) {
+  const provider = normalizeManagedProvider({ ...body, enabled: body.enabled ?? false });
+  if (!provider) return { status: 400, error: "Provider id is required" };
+  if (managementConfig.providers.some((candidate) => candidate.id === provider.id)) {
+    return { status: 409, error: "Provider already exists" };
+  }
+  managementConfig = normalizeManagementConfig({
+    ...managementConfig,
+    providers: [...managementConfig.providers, provider]
+  });
+  persistManagementConfig();
+  return { status: 201, provider };
+}
+
+function updateManagedProvider(providerId: string, body: JsonRecord) {
+  const id = sanitizeProviderId(providerId);
+  const existing = managementConfig.providers.find((provider) => provider.id === id);
+  if (!existing) return { status: 404, error: "Provider not found" };
+  const next = normalizeManagedProvider({ ...existing, ...body, id }, existing);
+  if (!next) return { status: 400, error: "Invalid provider request" };
+  managementConfig = normalizeManagementConfig({
+    ...managementConfig,
+    providers: managementConfig.providers.map((provider) => provider.id === id ? next : provider)
+  });
+  persistManagementConfig();
+  return { status: 200, provider: next };
+}
+
+function sanitizeProviderId(value: unknown) {
+  if (typeof value !== "string") return "";
+  return value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
 }
 
 function validateManagementConfig(config: ManagementConfig) {
@@ -634,6 +1281,24 @@ function updateManagedSkill(skillId: string, body: JsonRecord) {
   return { status: 200, skill: next };
 }
 
+function runManagedSkillEval(skillId: string) {
+  const id = sanitizeSkillId(skillId);
+  const skill = managementConfig.skills.find((candidate) => candidate.id === id);
+  if (!skill) return { status: 404, error: "Skill not found" };
+  const passed = skill.enabled && skill.availableVersions.includes(skill.activeVersion);
+  return {
+    status: 200,
+    eval: {
+      id: `skill_eval_${id}_${Date.now().toString(36)}`,
+      skillId: id,
+      version: skill.activeVersion,
+      passed,
+      checks: skill.evals.map((name) => ({ name, status: passed ? "passed" : "blocked" })),
+      createdAt: new Date().toISOString()
+    }
+  };
+}
+
 function createSkillBindings() {
   return deepResearchFlow.steps
     .filter((step) => step.skill)
@@ -644,8 +1309,8 @@ function createSkillBindings() {
     }));
 }
 
-function skillBindingForStep(stepId: string) {
-  const defaultBinding = deepResearchFlow.steps.find((step) => step.id === stepId)?.skill;
+function skillBindingForStep(stepId: string, flow: FlowDefinition = deepResearchFlow) {
+  const defaultBinding = flow.steps.find((step) => step.id === stepId)?.skill;
   if (!defaultBinding) return null;
   const skillId = defaultBinding.split("@")[0];
   const skill = managementConfig.skills.find((candidate) => candidate.id === skillId);
@@ -688,7 +1353,9 @@ function testProvider(id: string) {
 
 function scheduleLocalProgress(runId: string) {
   clearRunTimers(runId);
-  const stepIds = deepResearchFlow.steps.map((step) => step.id);
+  const existing = runViews.get(runId);
+  const flow = existing ? getFlowForRun(existing) : deepResearchFlow;
+  const stepIds = flow.steps.map((step) => step.id);
   const timers: Array<NodeJS.Timeout> = [];
 
   stepIds.forEach((stepId, index) => {
@@ -731,12 +1398,13 @@ function scheduleLocalProgress(runId: string) {
 }
 
 function createStepDetail(run: LocalRunView, stepId: string): JsonRecord {
+  const flow = getFlowForRun(run);
   return {
     runtime: "local-dev",
     runId: run.id,
     step: stepId,
     providerCalls: ["search", "read_sources"].includes(stepId) ? 1 : 0,
-    skillInvocation: skillBindingForStep(stepId),
+    skillInvocation: skillBindingForStep(stepId, flow),
     guardResults: "passed",
     costUsd: Number((0.01 + run.timeline.filter((item) => item.status === "succeeded").length * 0.02).toFixed(2)),
     latencyMs: 250,
@@ -1084,7 +1752,8 @@ function retryLocalRunStep(runId: string, stepId?: string) {
   const run = runViews.get(runId);
   if (!run) return undefined;
   clearRunTimers(runId);
-  const stepIds = deepResearchFlow.steps.map((step) => step.id);
+  const flow = getFlowForRun(run);
+  const stepIds = flow.steps.map((step) => step.id);
   const retryStepId = stepId && stepIds.includes(stepId) ? stepId : run.currentStepId;
   const retryIndex = Math.max(0, stepIds.indexOf(retryStepId));
 
@@ -1150,7 +1819,9 @@ function tokenize(value: string) {
 
 function scheduleLocalProgressFrom(runId: string, startIndex: number) {
   clearRunTimers(runId);
-  const stepIds = deepResearchFlow.steps.map((step) => step.id);
+  const existing = runViews.get(runId);
+  const flow = existing ? getFlowForRun(existing) : deepResearchFlow;
+  const stepIds = flow.steps.map((step) => step.id);
   const timers: Array<NodeJS.Timeout> = [];
 
   stepIds.slice(startIndex).forEach((stepId, offset) => {

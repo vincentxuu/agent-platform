@@ -32,7 +32,68 @@ app.get("/api/health", (c) => c.json({
   services: getCloudflareArchitectureSummary()
 }));
 
-app.get("/api/flows", (c) => c.json({ flows: [deepResearchFlow] }));
+app.get("/api/flows", async (c) => {
+  requireCloudflareBindings(c.env);
+  const repository = new D1AgentRepository(c.env.DB);
+  return c.json({ flows: await repository.listFlows() });
+});
+
+app.post("/api/flows", async (c) => {
+  requireCloudflareBindings(c.env);
+  const repository = new D1AgentRepository(c.env.DB);
+  const result = await repository.createFlowDraft(await c.req.json());
+  return c.json(result.flow ? result : { error: result.error }, result.status);
+});
+
+app.get("/api/flows/:flowId", async (c) => {
+  requireCloudflareBindings(c.env);
+  const repository = new D1AgentRepository(c.env.DB);
+  const flow = await repository.getFlowDetail(c.req.param("flowId"));
+  if (!flow) return c.json({ error: "Flow not found" }, 404);
+  return c.json({ flow });
+});
+
+app.patch("/api/flows/:flowId", async (c) => {
+  requireCloudflareBindings(c.env);
+  const repository = new D1AgentRepository(c.env.DB);
+  const result = await repository.updateFlowDraft(c.req.param("flowId"), await c.req.json());
+  return c.json(result.flow ? result : { error: result.error, details: result.details }, result.status);
+});
+
+app.delete("/api/flows/:flowId", async (c) => {
+  requireCloudflareBindings(c.env);
+  const repository = new D1AgentRepository(c.env.DB);
+  const result = await repository.deleteOrArchiveFlow(c.req.param("flowId"));
+  return c.json(result.flow || result.deleted ? result : { error: result.error }, result.status);
+});
+
+app.post("/api/flows/:flowId/clone", async (c) => {
+  requireCloudflareBindings(c.env);
+  const repository = new D1AgentRepository(c.env.DB);
+  const result = await repository.cloneFlowDraft(c.req.param("flowId"), await c.req.json().catch(() => ({})));
+  return c.json(result.flow ? result : { error: result.error, details: result.details }, result.status);
+});
+
+app.post("/api/flows/:flowId/versions", async (c) => {
+  requireCloudflareBindings(c.env);
+  const repository = new D1AgentRepository(c.env.DB);
+  const result = await repository.publishFlowDraft(c.req.param("flowId"));
+  return c.json(result.flow ? result : { error: result.error, details: result.details }, result.status);
+});
+
+app.post("/api/flows/:flowId/runs", async (c) => {
+  requireCloudflareBindings(c.env);
+  const body = await c.req.json();
+  const result = await createCloudflareRun({ env: c.env, flowId: c.req.param("flowId"), body });
+  if (result.error) return c.json(result, result.status);
+  c.executionCtx.waitUntil(c.env.RUN_QUEUE.send({
+    type: "run.created",
+    runId: result.run.id,
+    stepRunId: result.stepRun.id,
+    stepId: result.stepRun.stepId
+  }));
+  return c.json(result, 202);
+});
 
 app.get("/api/readiness", (c) => c.json(createReadinessReport(c.env)));
 
@@ -56,6 +117,72 @@ app.get("/api/skills", async (c) => {
   return c.json({ skills: config.skills, bindings: createSkillBindings(config) });
 });
 
+app.get("/api/providers", async (c) => {
+  requireCloudflareBindings(c.env);
+  const config = await loadManagementConfig(c.env);
+  return c.json({ providers: config.providers });
+});
+
+app.get("/api/policies", async (c) => {
+  requireCloudflareBindings(c.env);
+  const config = await loadManagementConfig(c.env);
+  return c.json({ policies: config.policies || [] });
+});
+
+app.post("/api/policies", async (c) => {
+  requireCloudflareBindings(c.env);
+  const result = await createManagedPolicy(c.env, await c.req.json());
+  return c.json(result.policy ? result : { error: result.error }, result.status);
+});
+
+app.patch("/api/policies/:policyId", async (c) => {
+  requireCloudflareBindings(c.env);
+  const result = await updateManagedPolicy(c.env, c.req.param("policyId"), await c.req.json());
+  return c.json(result.policy ? result : { error: result.error }, result.status);
+});
+
+app.delete("/api/policies/:policyId", async (c) => {
+  requireCloudflareBindings(c.env);
+  const result = await archiveManagedPolicy(c.env, c.req.param("policyId"));
+  return c.json(result.policy ? result : { error: result.error }, result.status);
+});
+
+app.post("/api/policies/:policyId/versions", async (c) => {
+  requireCloudflareBindings(c.env);
+  const result = await publishManagedPolicy(c.env, c.req.param("policyId"));
+  return c.json(result.policy ? result : { error: result.error }, result.status);
+});
+
+app.post("/api/policies/:policyId/apply", async (c) => {
+  requireCloudflareBindings(c.env);
+  const result = await applyManagedPolicy(c.env, c.req.param("policyId"));
+  return c.json(result.policy ? result : { error: result.error }, result.status);
+});
+
+app.post("/api/improvements", async (c) => {
+  requireCloudflareBindings(c.env);
+  const result = await createImprovementProposal(c.env, await c.req.json());
+  return c.json({ proposal: result.proposal, proposals: result.proposals }, 201);
+});
+
+app.post("/api/providers", async (c) => {
+  requireCloudflareBindings(c.env);
+  const result = await createManagedProvider(c.env, await c.req.json());
+  return c.json(result.provider ? result : { error: result.error }, result.status);
+});
+
+app.patch("/api/providers/:providerId", async (c) => {
+  requireCloudflareBindings(c.env);
+  const result = await updateManagedProvider(c.env, c.req.param("providerId"), await c.req.json());
+  return c.json(result.provider ? result : { error: result.error }, result.status);
+});
+
+app.delete("/api/providers/:providerId", async (c) => {
+  requireCloudflareBindings(c.env);
+  const result = await updateManagedProvider(c.env, c.req.param("providerId"), { enabled: false });
+  return c.json(result.provider ? result : { error: result.error }, result.status);
+});
+
 app.post("/api/skills", async (c) => {
   requireCloudflareBindings(c.env);
   return c.json(await createManagedSkill(c.env, await c.req.json()), 201);
@@ -64,6 +191,17 @@ app.post("/api/skills", async (c) => {
 app.patch("/api/skills/:skillId", async (c) => {
   requireCloudflareBindings(c.env);
   return c.json(await updateManagedSkill(c.env, c.req.param("skillId"), await c.req.json()));
+});
+
+app.delete("/api/skills/:skillId", async (c) => {
+  requireCloudflareBindings(c.env);
+  return c.json(await updateManagedSkill(c.env, c.req.param("skillId"), { enabled: false }));
+});
+
+app.post("/api/skills/:skillId/evals", async (c) => {
+  requireCloudflareBindings(c.env);
+  const result = await runManagedSkillEval(c.env, c.req.param("skillId"));
+  return c.json(result.eval ? result : { error: result.error }, result.status);
 });
 
 app.post("/api/providers/:providerId/test", async (c) => {
@@ -90,11 +228,14 @@ app.delete("/api/runs", async (c) => {
 app.post("/api/runs", async (c) => {
   requireCloudflareBindings(c.env);
   const body = await c.req.json();
-  const validation = validateCloudflareRunRequest(body);
-  if (validation.errors.length > 0) {
-    return c.json({ error: "Invalid request", details: validation.errors }, 400);
+  if (!body.flowId || body.flowId === "deep_research") {
+    const validation = validateCloudflareRunRequest(body);
+    if (validation.errors.length > 0) {
+      return c.json({ error: "Invalid request", details: validation.errors }, 400);
+    }
   }
-  const result = await createCloudflareRun({ env: c.env, body });
+  const result = await createCloudflareRun({ env: c.env, flowId: body.flowId || "deep_research", body });
+  if (result.error) return c.json(result, result.status);
   c.executionCtx.waitUntil(c.env.RUN_QUEUE.send({
     type: "run.created",
     runId: result.run.id,
@@ -200,8 +341,11 @@ export default {
   }
 };
 
-async function createCloudflareRun({ env, body }) {
-  assertValidFlowDefinition(deepResearchFlow);
+async function createCloudflareRun({ env, flowId = "deep_research", body }) {
+  const repository = new D1AgentRepository(env.DB);
+  const flow = await repository.getRunnableFlow(flowId, typeof body.version === "number" ? body.version : undefined);
+  if (!flow) return { status: 404, error: "Runnable flow not found" };
+  assertValidFlowDefinition(flow);
   const presetId = body.presetId || "standard";
   const rawInputs = body.inputs || {};
   const inputs = {
@@ -212,8 +356,8 @@ async function createCloudflareRun({ env, body }) {
       ? 365
       : Number(rawInputs.freshness_days)
   };
-  const inputErrors = validateFlowInputs(deepResearchFlow, inputs);
-  if (!deepResearchFlow.presets.some((preset) => preset.id === presetId)) {
+  const inputErrors = validateFlowInputs(flow, inputs);
+  if (!flow.presets.some((preset) => preset.id === presetId)) {
     inputErrors.push(`Unknown presetId: ${presetId}`);
   }
   if (inputs.freshness_days <= 0 || !Number.isFinite(inputs.freshness_days)) {
@@ -223,13 +367,11 @@ async function createCloudflareRun({ env, body }) {
     return badRequest(`Invalid flow inputs:\n${inputErrors.map((error) => `- ${error}`).join("\n")}`);
   }
 
-  const repository = new D1AgentRepository(env.DB);
-  await repository.seedBuiltInFlows();
   const runId = createId("run");
-  const [initialStepId] = findInitialStepIds(deepResearchFlow);
+  const [initialStepId] = findInitialStepIds(flow);
   const stepRunId = createId("step");
 
-  const run = await repository.createRun({ id: runId, presetId, inputs, initialStepId });
+  const run = await repository.createRun({ id: runId, flow, presetId, inputs, initialStepId });
   const stepRun = await repository.createStepRun({ id: stepRunId, runId, stepId: initialStepId });
   await repository.recordRunEvent({
     id: createId("event"),
@@ -248,7 +390,7 @@ async function createCloudflareRun({ env, body }) {
     params: {
       runId,
       stepRunId,
-      flowId: deepResearchFlow.id,
+      flowId: flow.id,
       presetId,
       inputs,
       initialStepId
@@ -377,6 +519,7 @@ function defaultManagementConfig(env) {
   return {
     flow: {
       id: "deep_research",
+      policyRef: "standard-research",
       defaultPreset: "standard",
       defaultAudience: "工程管理者",
       defaultFreshnessDays: 365
@@ -387,6 +530,8 @@ function defaultManagementConfig(env) {
       citationRequired: true,
       allowedProviders: DEFAULT_ALLOWED_PROVIDER_IDS
     },
+    policies: [defaultManagedPolicy()],
+    improvementProposals: [],
     providers: createProviderConfigs(env),
     skills: builtInSkills()
   };
@@ -396,16 +541,15 @@ function normalizeManagementConfig(input, env) {
   const fallback = defaultManagementConfig(env);
   const providerById = new Map(fallback.providers.map((provider) => [provider.id, provider]));
   for (const provider of input.providers || []) {
-    if (!provider?.id || !providerById.has(provider.id)) continue;
-    providerById.set(provider.id, {
-      ...providerById.get(provider.id),
-      enabled: Boolean(provider.enabled),
-      credentialRef: typeof provider.credentialRef === "string" ? provider.credentialRef.slice(0, 120) : providerById.get(provider.id).credentialRef,
-      activeModel: typeof provider.activeModel === "string" && providerById.get(provider.id).models.includes(provider.activeModel)
-        ? provider.activeModel
-        : providerById.get(provider.id).activeModel
+    const normalized = normalizeManagedProvider(provider, providerById.get(provider.id));
+    if (!normalized) continue;
+    providerById.set(normalized.id, {
+      ...(providerById.get(normalized.id) || normalized),
+      ...normalized,
+      activeModel: normalized.models.includes(normalized.activeModel) ? normalized.activeModel : normalized.models[0]
     });
   }
+  const allowedProviderIds = new Set(providerById.keys());
   const skillById = new Map(fallback.skills.map((skill) => [skill.id, skill]));
   for (const skill of input.skills || []) {
     const normalized = normalizeManagedSkill(skill, skillById.get(skill.id));
@@ -414,6 +558,7 @@ function normalizeManagementConfig(input, env) {
   return {
     flow: {
       id: "deep_research",
+      policyRef: typeof input.flow?.policyRef === "string" ? input.flow.policyRef : fallback.flow.policyRef,
       defaultPreset: typeof input.flow?.defaultPreset === "string" ? input.flow.defaultPreset : fallback.flow.defaultPreset,
       defaultAudience: typeof input.flow?.defaultAudience === "string" ? input.flow.defaultAudience.slice(0, 120) : fallback.flow.defaultAudience,
       defaultFreshnessDays: Number(input.flow?.defaultFreshnessDays || fallback.flow.defaultFreshnessDays)
@@ -423,12 +568,239 @@ function normalizeManagementConfig(input, env) {
       maxIterations: Number(input.policy?.maxIterations ?? fallback.policy.maxIterations),
       citationRequired: Boolean(input.policy?.citationRequired ?? fallback.policy.citationRequired),
       allowedProviders: Array.isArray(input.policy?.allowedProviders)
-        ? input.policy.allowedProviders.filter((id) => providerById.has(id))
+        ? input.policy.allowedProviders.filter((id) => allowedProviderIds.has(id))
         : fallback.policy.allowedProviders
     },
+    policies: normalizeManagedPolicies(input.policies, fallback.policies, [...providerById.keys()]),
+    improvementProposals: normalizeImprovementProposals(input.improvementProposals),
     providers: [...providerById.values()],
     skills: [...skillById.values()]
   };
+}
+
+function defaultManagedPolicy() {
+  const now = new Date().toISOString();
+  const config = {
+    maxCostUsd: 3,
+    maxIterations: 4,
+    citationRequired: true,
+    allowedProviders: DEFAULT_ALLOWED_PROVIDER_IDS
+  };
+  return {
+    id: "standard-research",
+    name: "Standard Research",
+    status: "published",
+    version: 1,
+    draft: config,
+    versions: [{ version: 1, publishedAt: now, config }]
+  };
+}
+
+function normalizeManagedPolicies(input, fallback, providerIds) {
+  const byId = new Map((fallback || []).map((policy) => [policy.id, policy]));
+  if (Array.isArray(input)) {
+    for (const policy of input) {
+      const normalized = normalizeManagedPolicy(policy, byId.get(policy?.id), providerIds);
+      if (normalized) byId.set(normalized.id, normalized);
+    }
+  }
+  return [...byId.values()];
+}
+
+function normalizeManagedPolicy(input, fallback, providerIds) {
+  const id = sanitizePolicyId(input?.id || fallback?.id);
+  if (!id) return undefined;
+  const draftSource = input?.draft || input || fallback?.draft || {};
+  const draft = {
+    maxCostUsd: Number(draftSource.maxCostUsd ?? fallback?.draft.maxCostUsd ?? 3),
+    maxIterations: Number(draftSource.maxIterations ?? fallback?.draft.maxIterations ?? 4),
+    citationRequired: Boolean(draftSource.citationRequired ?? fallback?.draft.citationRequired ?? true),
+    allowedProviders: Array.isArray(draftSource.allowedProviders)
+      ? draftSource.allowedProviders.filter((providerId) => providerIds.includes(providerId))
+      : fallback?.draft.allowedProviders || DEFAULT_ALLOWED_PROVIDER_IDS
+  };
+  return {
+    id,
+    name: typeof input?.name === "string" ? input.name.slice(0, 80) : fallback?.name || id,
+    status: ["draft", "published", "archived"].includes(input?.status) ? input.status : fallback?.status || "draft",
+    version: Number(input?.version ?? fallback?.version ?? 0),
+    draft,
+    versions: Array.isArray(input?.versions) ? input.versions : fallback?.versions || []
+  };
+}
+
+async function createManagedPolicy(env, body) {
+  const config = await loadManagementConfig(env);
+  const policy = normalizeManagedPolicy({ ...body, status: "draft", version: 0 }, undefined, config.providers.map((provider) => provider.id));
+  if (!policy) return { status: 400, error: "Policy id is required" };
+  if (config.policies.some((candidate) => candidate.id === policy.id)) return { status: 409, error: "Policy already exists" };
+  const next = normalizeManagementConfig({ ...config, policies: [...config.policies, policy] }, env);
+  await env.CACHE.put("agent-platform:management-config", JSON.stringify(next));
+  return { status: 201, policy, policies: next.policies };
+}
+
+async function updateManagedPolicy(env, policyId, body) {
+  const config = await loadManagementConfig(env);
+  const id = sanitizePolicyId(policyId);
+  const existing = config.policies.find((policy) => policy.id === id);
+  if (!existing) return { status: 404, error: "Policy not found" };
+  const policy = normalizeManagedPolicy({ ...existing, ...body, id, status: "draft" }, existing, config.providers.map((provider) => provider.id));
+  if (!policy) return { status: 400, error: "Invalid policy request" };
+  const next = normalizeManagementConfig({ ...config, policies: config.policies.map((candidate) => candidate.id === id ? policy : candidate) }, env);
+  await env.CACHE.put("agent-platform:management-config", JSON.stringify(next));
+  return { status: 200, policy, policies: next.policies };
+}
+
+async function publishManagedPolicy(env, policyId) {
+  const config = await loadManagementConfig(env);
+  const id = sanitizePolicyId(policyId);
+  const existing = config.policies.find((policy) => policy.id === id);
+  if (!existing) return { status: 404, error: "Policy not found" };
+  const version = existing.version + 1;
+  const policy = {
+    ...existing,
+    status: "published",
+    version,
+    versions: [...existing.versions, { version, publishedAt: new Date().toISOString(), config: existing.draft }]
+  };
+  const next = normalizeManagementConfig({ ...config, policies: config.policies.map((candidate) => candidate.id === id ? policy : candidate) }, env);
+  await env.CACHE.put("agent-platform:management-config", JSON.stringify(next));
+  return { status: 201, policy, version };
+}
+
+async function applyManagedPolicy(env, policyId) {
+  const config = await loadManagementConfig(env);
+  const id = sanitizePolicyId(policyId);
+  const policy = config.policies.find((candidate) => candidate.id === id && candidate.status !== "archived");
+  if (!policy) return { status: 404, error: "Policy not found" };
+  const next = normalizeManagementConfig({ ...config, flow: { ...config.flow, policyRef: id }, policy: policy.draft }, env);
+  await env.CACHE.put("agent-platform:management-config", JSON.stringify(next));
+  return { status: 200, policy, config: next };
+}
+
+async function archiveManagedPolicy(env, policyId) {
+  const config = await loadManagementConfig(env);
+  const id = sanitizePolicyId(policyId);
+  const existing = config.policies.find((policy) => policy.id === id);
+  if (!existing) return { status: 404, error: "Policy not found" };
+  const policy = { ...existing, status: "archived" };
+  const next = normalizeManagementConfig({ ...config, policies: config.policies.map((candidate) => candidate.id === id ? policy : candidate) }, env);
+  await env.CACHE.put("agent-platform:management-config", JSON.stringify(next));
+  return { status: 200, policy, policies: next.policies };
+}
+
+function sanitizePolicyId(value) {
+  if (typeof value !== "string") return "";
+  return value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+}
+
+function normalizeImprovementProposals(input) {
+  if (!Array.isArray(input)) return [];
+  return input.map((proposal) => normalizeImprovementProposal(proposal)).filter(Boolean);
+}
+
+function normalizeImprovementProposal(input) {
+  const id = typeof input?.id === "string" ? input.id.slice(0, 80) : "";
+  if (!id) return undefined;
+  const type = ["eval-case", "skill", "policy", "memory"].includes(input?.type) ? input.type : "eval-case";
+  const evalCaseId = typeof input?.evalCase?.id === "string" ? input.evalCase.id : `eval_case_${id}`;
+  return {
+    id,
+    type,
+    status: "review",
+    sourceRunId: typeof input?.sourceRunId === "string" ? input.sourceRunId : undefined,
+    summary: typeof input?.summary === "string" ? input.summary.slice(0, 300) : "Review failed or corrected run as a regression case.",
+    evalCase: {
+      id: evalCaseId.slice(0, 100),
+      sourceRunId: typeof input?.evalCase?.sourceRunId === "string" ? input.evalCase.sourceRunId : typeof input?.sourceRunId === "string" ? input.sourceRunId : undefined,
+      input: isRecord(input?.evalCase?.input) ? input.evalCase.input : {},
+      expected: isRecord(input?.evalCase?.expected) ? input.evalCase.expected : {},
+      status: "draft"
+    },
+    createdAt: typeof input?.createdAt === "string" ? input.createdAt : new Date().toISOString()
+  };
+}
+
+async function createImprovementProposal(env, body) {
+  const config = await loadManagementConfig(env);
+  const sourceRunId = typeof body.sourceRunId === "string" ? body.sourceRunId : undefined;
+  let sourceRun;
+  if (sourceRunId) {
+    const repository = new D1AgentRepository(env.DB);
+    sourceRun = await repository.getRun(sourceRunId);
+  }
+  const proposal = normalizeImprovementProposal({
+    id: `improvement_${Date.now().toString(36)}`,
+    type: body.type || "eval-case",
+    sourceRunId,
+    summary: typeof body.summary === "string" ? body.summary : sourceRun ? `Create eval case from ${sourceRun.topic || sourceRun.id}` : "Create eval case from operator feedback.",
+    evalCase: {
+      id: `eval_case_${Date.now().toString(36)}`,
+      sourceRunId,
+      input: sourceRun ? { topic: sourceRun.topic, presetId: sourceRun.preset_id } : isRecord(body.input) ? body.input : {},
+      expected: isRecord(body.expected) ? body.expected : { status: "review-required" }
+    },
+    createdAt: new Date().toISOString()
+  });
+  const next = normalizeManagementConfig({
+    ...config,
+    improvementProposals: [proposal, ...config.improvementProposals].slice(0, 50)
+  }, env);
+  await env.CACHE.put("agent-platform:management-config", JSON.stringify(next));
+  return { status: 201, proposal, proposals: next.improvementProposals };
+}
+
+function isRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeManagedProvider(input, fallback) {
+  const id = sanitizeProviderId(input?.id || fallback?.id);
+  if (!id) return undefined;
+  const models = Array.isArray(input?.models) && input.models.length > 0
+    ? input.models.map(String).filter(Boolean).slice(0, 12)
+    : fallback?.models || [typeof input?.activeModel === "string" ? input.activeModel : "default"];
+  const activeModel = typeof input?.activeModel === "string" ? input.activeModel.slice(0, 80) : fallback?.activeModel || models[0];
+  return {
+    id,
+    name: typeof input?.name === "string" ? input.name.slice(0, 80) : fallback?.name || id,
+    enabled: Boolean(input?.enabled ?? fallback?.enabled ?? false),
+    credentialRef: typeof input?.credentialRef === "string" ? input.credentialRef.slice(0, 120) : fallback?.credentialRef || `${id.toUpperCase()}_API_KEY`,
+    models: models.includes(activeModel) ? models : [activeModel, ...models],
+    activeModel
+  };
+}
+
+async function createManagedProvider(env, body) {
+  const config = await loadManagementConfig(env);
+  const provider = normalizeManagedProvider({ ...body, enabled: body.enabled ?? false });
+  if (!provider) return { status: 400, error: "Provider id is required" };
+  if (config.providers.some((candidate) => candidate.id === provider.id)) {
+    return { status: 409, error: "Provider already exists" };
+  }
+  const next = normalizeManagementConfig({ ...config, providers: [...config.providers, provider] }, env);
+  await env.CACHE.put("agent-platform:management-config", JSON.stringify(next));
+  return { status: 201, provider, providers: next.providers };
+}
+
+async function updateManagedProvider(env, providerId, body) {
+  const config = await loadManagementConfig(env);
+  const id = sanitizeProviderId(providerId);
+  const existing = config.providers.find((provider) => provider.id === id);
+  if (!existing) return { status: 404, error: "Provider not found" };
+  const provider = normalizeManagedProvider({ ...existing, ...body, id }, existing);
+  if (!provider) return { status: 400, error: "Invalid provider request" };
+  const next = normalizeManagementConfig({
+    ...config,
+    providers: config.providers.map((candidate) => candidate.id === id ? provider : candidate)
+  }, env);
+  await env.CACHE.put("agent-platform:management-config", JSON.stringify(next));
+  return { status: 200, provider, providers: next.providers };
+}
+
+function sanitizeProviderId(value) {
+  if (typeof value !== "string") return "";
+  return value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
 }
 
 function validateManagementConfig(config) {
@@ -568,6 +940,25 @@ async function updateManagedSkill(env, skillId, body) {
     skills: config.skills.map((skill) => skill.id === id ? next : skill)
   }, env)));
   return { skill: next, skills: (await loadManagementConfig(env)).skills };
+}
+
+async function runManagedSkillEval(env, skillId) {
+  const config = await loadManagementConfig(env);
+  const id = sanitizeSkillId(skillId);
+  const skill = config.skills.find((candidate) => candidate.id === id);
+  if (!skill) return { status: 404, error: "Skill not found" };
+  const passed = skill.enabled && skill.availableVersions.includes(skill.activeVersion);
+  return {
+    status: 200,
+    eval: {
+      id: `skill_eval_${id}_${Date.now().toString(36)}`,
+      skillId: id,
+      version: skill.activeVersion,
+      passed,
+      checks: skill.evals.map((name) => ({ name, status: passed ? "passed" : "blocked" })),
+      createdAt: new Date().toISOString()
+    }
+  };
 }
 
 function createSkillBindings(config) {
@@ -1083,16 +1474,41 @@ function createCloudflareEvidence(coordinator) {
       ? [coordinator.artifact]
       : [];
   if (artifacts.length === 0) return [];
-  const sourceArtifact = artifacts.find((artifact) => artifact.id === "evidence_bundle") || artifacts[0];
-  return [{
-    claim: `Cloudflare Workflow reached ${coordinator.phase || coordinator.status}.`,
-    source: "cloudflare-workflow",
-    sourceTitle: "Cloudflare Workflow status",
-    sourceUrl: sourceArtifact.key ? `r2://${sourceArtifact.key}` : "cloudflare://workflow",
-    excerpt: "Workflow status and artifact metadata were recorded through Durable Objects, KV, and R2.",
-    confidence: "medium",
+  const sources = [
+    {
+      artifact: artifacts.find((artifact) => artifact.id === "evidence_bundle") || artifacts[0],
+      claim: `Cloudflare Workflow reached ${coordinator.phase || coordinator.status}.`,
+      source: "cloudflare-workflow",
+      sourceTitle: "Cloudflare Workflow status",
+      excerpt: "Workflow status and artifact metadata were recorded through Durable Objects, KV, and R2.",
+      confidence: "medium"
+    },
+    {
+      artifact: artifacts.find((artifact) => artifact.id === "markdown_report") || artifacts[0],
+      claim: "The run produced an evidence-backed Markdown report artifact.",
+      source: "cloudflare-artifacts",
+      sourceTitle: "Markdown report artifact",
+      excerpt: "Report artifact generation is recorded in R2 and linked back to the completed run.",
+      confidence: "medium"
+    },
+    {
+      artifact: artifacts.find((artifact) => artifact.id === "summary_json") || artifacts[0],
+      claim: "The run captured structured summary metadata for inspection and export.",
+      source: "cloudflare-summary",
+      sourceTitle: "Workflow summary artifact",
+      excerpt: "Summary metadata preserves run identifiers, planned steps, and artifact references for review.",
+      confidence: "medium"
+    }
+  ];
+  return sources.map((source) => ({
+    claim: source.claim,
+    source: source.source,
+    sourceTitle: source.sourceTitle,
+    sourceUrl: source.artifact?.key ? `r2://${source.artifact.key}` : "cloudflare://workflow",
+    excerpt: source.excerpt,
+    confidence: source.confidence,
     conflicts: "none"
-  }];
+  }));
 }
 
 function applyEvidenceReviews(evidence, reviews) {

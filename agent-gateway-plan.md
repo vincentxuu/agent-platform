@@ -1,20 +1,28 @@
-# Agent Gateway 規劃文件
+# Agent Platform / Agent Gateway 規劃文件
 
 **Date:** 2026-05-14
 **Status:** Draft
 **Source research:** `/Users/vincent/Work/research/ai/2026-05-14_12-04_agent-workflow-trends.md`
 
+> Naming note: Agent Gateway 是早期工作名；對外產品名稱以 Agent Platform 為主。Gateway 指的是 provider / policy / runtime 邊界，不是產品只做 API gateway。
+
 ## 1. 產品定位
 
-Agent Gateway 是一個 AI Agent Platform，提供 provider routing、policy control、evidence tracking 與 artifact generation，讓使用者透過 Web UI 選擇、配置、執行、監控與驗證多種 AI agent workflows。
+Agent Platform 是一個開源 AI workflow control plane，提供可操作的 agent workflow runtime、provider routing、policy control、evidence tracking 與 artifact generation，讓使用者透過 Web UI 定義、配置、執行、觀測、控制、驗證、產出與改善多種 AI agent workflows。
 
 一句話定位：
 
-> AI Agent Platform with provider routing, policy control, evidence tracking, and artifact generation.
+> Open-source AI workflow control plane for creating, versioning, running, observing, and verifying auditable agent flows.
 
 中文定位：
 
-> 一個可配置的 AI Agent 平台，統一管理模型、工具、資料來源、執行策略、驗證機制與最終產物。
+> 一個可配置的 AI Agent 工作流平台，統一管理 flows、模型、工具、資料來源、執行策略、驗證機制、證據與最終產物。
+
+核心判斷：
+
+- **Flow 是產品根資源，但產品不是 CRUD 後台。** 使用者先 define / configure flow，再從 flow 建立 run；providers、policies、skills、evals、memory、artifacts 都服務於 runtime loop。
+- **Run 是 flow version 的執行實例。** Run 不應成為唯一產品入口。
+- **Deep Research 是 seed flow / showcase。** 它驗證 runtime、evidence、artifact 與 policy contract，但不能限制產品形狀。
 
 ## 2. 使用者意圖
 
@@ -42,7 +50,9 @@ Agent Gateway 是一個 AI Agent Platform，提供 provider routing、policy con
 - 不做空白 chatbot。
 - 不只做模型 router。
 - 不一開始做完全自由 DAG builder。
-- 先做 curated flows + strategy presets + advanced YAML/JSON editor。
+- 先做 command surface + Flow Library + seeded templates。
+- Flow editor 第一版可以是結構化表單加 schema/YAML 檢視，不必一開始做拖拉式 visual DAG。
+- Curated flows 應作為可複製模板，不應取代自訂 flow。
 
 ## 4. 系統分層
 
@@ -116,18 +126,37 @@ D1 metadata + KV cache + R2 artifacts/evidence + Workers AI/provider adapters
 
 主要頁面：
 
-- **Run:** 選 flow、填 inputs、選 preset、啟動 run、看 streaming progress。
-- **Flows:** 管理 workflow template、版本、輸入欄位、step graph。
-- **Skills:** 管理可版本化能力包、觸發條件、權限、eval 與發布狀態。
-- **Providers:** 管理 LLM、Search、Reader、Knowledge、Action providers。
-- **Policies:** 管理成本、權限、fallback、guardrails、verification。
+- **Flows:** Flow Library、搜尋、建立、複製 seed flow、封存、查看最近 runs。
+- **Flow Editor:** 編輯 metadata、input schema、steps、edges、presets、provider bindings、policy refs、artifact schema，並執行 publish validation。
+- **Run:** 從 flow version 選 preset、填 inputs、檢查策略摘要、啟動 run、看 streaming progress。
+- **Runs:** 查看歷史 run、active runs、step timeline、錯誤、成本、重跑、取消、刪除入口。
+- **Skills:** 管理可版本化能力包，支援 list / detail / install / update / disable / eval。
+- **Providers:** 管理 LLM、Search、Reader、Knowledge、Action providers，支援 create / update / disable / test readiness。
+- **Policies:** 管理成本、權限、fallback、guardrails、verification，支援 create / update / version / apply。
 - **Context:** 查看每個 step 的 context composition、token budget、compression 與 injected memory。
 - **Memory:** 管理 procedural、episodic、semantic memory 的 scope、來源、衰減與審核狀態。
-- **Runs:** 查看歷史 run、step timeline、錯誤、成本與重跑入口。
 - **Evaluations:** 查看 skill / flow / artifact / regression eval 結果與趨勢。
 - **Observability:** 查看 provider health、latency、cost、token、tool usage、retry、failure pattern。
 - **Evidence:** 查看 sources、quotes、claims、confidence、conflicts。
 - **Artifacts:** 管理 Markdown report、Notion page、Slack draft、GitHub comments、PDF/PPT。
+
+所有核心頁面都應先定義 command，而不是只定義 table / detail view：
+
+- **Define:** create / clone / edit flow draft，validate，publish version。
+- **Configure:** test / disable provider，version / apply policy，install / disable / eval skill，bind capabilities to steps。
+- **Run:** create run from a specific flow version and preset.
+- **Observe:** inspect timeline、step state、context、tool/provider calls、cost、latency、errors。
+- **Control:** cancel、resume、retry-step、approve gate、use fallback。
+- **Verify:** review claims、evidence、citations、policy violations、eval results，approve / reject。
+- **Produce:** regenerate、version、approve、export artifacts。
+- **Improve:** create eval case、skill proposal、policy suggestion、memory proposal from run evidence.
+
+第一個可用畫面應是 Flow Library / Recent Runs dashboard：
+
+- 顯示內建 seed flows 與使用者自訂 flows。
+- 每個 flow card 顯示 published version、presets、最近 run status、provider readiness、policy summary。
+- Primary actions 是 Create Flow、Clone Deep Research、Run Flow。
+- Empty state 要引導下一步，不顯示 raw JSON 或只列內部狀態。
 
 ### 4.2 Flow Definition Layer
 
@@ -144,6 +173,33 @@ FlowEdge
 FlowPreset
 ArtifactSchema
 ```
+
+Define command 是 MVP 最核心路徑，不是後續增強：
+
+- `GET /api/flows`：列出 seed、自訂、draft、published、archived flows。
+- `POST /api/flows`：建立新 flow draft，或從 seed / existing flow clone。
+- `GET /api/flows/:id`：讀取 flow metadata、versions、draft、presets、bindings、最近 runs。
+- `PATCH /api/flows/:id`：更新 draft 的 metadata、input schema、steps、edges、presets、provider bindings、policy refs、artifact schemas。
+- `DELETE /api/flows/:id`：刪除沒有 runs 的 draft；已有 runs 的 flow 只能 archive，保留 audit trail。
+- `POST /api/flows/:id/versions`：publish draft，產生不可變 flow version。
+- `POST /api/flows/:id/runs`：從指定 flow version / preset 建立 run。
+
+Flow 狀態：
+
+- `draft`：可編輯，不應用於正式 run，適合 validation preview。
+- `published`：不可變，用於正式 run；run 必須保存 `flow_id` 與 `flow_version_id`。
+- `archived`：不可新增 run，但保留歷史 run、evidence、artifacts 與 audit trail。
+
+Flow editor 第一版應用結構化 command controls 管理複雜度：
+
+- Metadata tab：name、description、owner、tags、visibility。
+- Inputs tab：JSON schema / form fields、required、default、validation。
+- Steps tab：step type、skill binding、provider requirements、tool permissions、retry policy。
+- Edges tab：next step、condition、loop limit、failure path。
+- Presets tab：Quick / Standard / Deep 或自訂 preset 的 budget、quality、freshness、verification。
+- Policy tab：cost limit、provider fallback、guardrails、human approval。
+- Artifacts tab：output types、schema、approval / export target。
+- Validate / Publish：檢查 graph、schema、bindings、policy、artifact schema 後才能 publish。
 
 範例：
 
@@ -682,7 +738,7 @@ ToolOverlapWarning
 
 ### 4.9 Memory System
 
-Memory 是 harness 資產，不只是 Learning Loop 的輸出。Agent Gateway 應 local-first 擁有 memory，避免把使用者偏好、團隊規則、run history 與 workflow know-how 鎖在外部 provider。
+Memory 是 harness 資產，不只是 Learning Loop 的輸出。Agent Platform 應 local-first 擁有 memory，避免把使用者偏好、團隊規則、run history 與 workflow know-how 鎖在外部 provider。
 
 Memory 類型：
 
@@ -1003,14 +1059,17 @@ Artifact 應支援：
 
 ### 5.1 使用者流程
 
-1. 選擇 Flow，例如 Deep Research。
-2. 選擇 Preset，例如 Quick、Standard、Deep、Enterprise。
-3. 填必要欄位，例如 topic、audience、freshness、output format。
-4. 檢查策略摘要，例如 sources、budget、providers、verification。
-5. 開始執行。
-6. 在 Run Timeline 看每一步進度。
-7. 在 Evidence Viewer 檢查來源與 claim。
-8. 在 Artifact Viewer 編輯、核准、匯出。
+1. 進入 Flow Library，瀏覽 seed flows 與自訂 flows。
+2. 建立新 Flow，或複製 Deep Research seed flow 作為起點。
+3. 在 Flow Editor 維護 inputs、steps、edges、presets、provider bindings、policy refs、artifact schema。
+4. Validate / Publish flow，產生可執行 version。
+5. 從 flow version 選擇 Preset，例如 Quick、Standard、Deep、Enterprise。
+6. 填必要欄位，例如 topic、audience、freshness、output format。
+7. 檢查策略摘要，例如 sources、budget、providers、verification。
+8. 開始執行。
+9. 在 Run Timeline 看每一步進度。
+10. 在 Evidence Viewer 檢查來源與 claim。
+11. 在 Artifact Viewer 編輯、核准、匯出。
 
 ### 5.2 可控性設計
 
@@ -1019,16 +1078,26 @@ Artifact 應支援：
 - 使用者可針對某個 step 重跑，而不是整個 flow 重來。
 - 使用者可把 artifact 回退到前一版。
 - 使用者可查看每個 claim 的 evidence，不必盲信最終報告。
+- 使用者可複製既有 flow 形成新的 draft，而不是直接修改歷史版本。
+- 使用者可封存 flow，但不能破壞已有 run 的 audit trail。
 
 ## 6. MVP 範圍
 
-第一版應以 Deep Research 作為 showcase，但底層抽象保持通用 Flow。
+第一版必須同時做到 command surface 與 Deep Research showcase。Deep Research 是 seed flow，用來證明 runtime、evidence、artifact、policy 與 observability；command surface 則證明這不是 hardcoded demo 或單一執行表單。
 
 ### 6.1 MVP 必做
 
 - Web UI
-- Flow list + Run
-- Deep Research flow
+- Flow Library / Recent Runs dashboard
+- Define：create / clone flow draft，edit inputs / steps / edges / presets / provider bindings / policy refs / artifact schema，validate，publish immutable version
+- Configure：create / test / disable provider，version / apply policy，install / disable / eval skill，bind capability to flow step
+- Run：`POST /api/flows/:id/runs` 作為主要入口，run 必須引用 fixed flow version / preset / bindings
+- Observe：timeline、step detail、context snapshot、provider/tool calls、cost、latency、token、retry、error
+- Control：cancel、resume、retry-step、approval gate、checkpoint recovery
+- Verify：evidence / citation / claim review，policy violation review，eval result review，approve / reject evidence or artifact
+- Produce：Markdown report、JSON evidence bundle、artifact versioning、regenerate、approve、export
+- Improve：從 failed run / feedback / eval result 建立 eval case、skill proposal、policy suggestion、memory proposal
+- Deep Research seed flow
 - Quick / Standard / Deep 三個 presets
 - Local skill package support
 - Built-in skills: research-planner、source-ranker、citation-extractor、report-synthesizer
@@ -1066,6 +1135,7 @@ Artifact 應支援：
 ### 6.2 MVP 暫不做
 
 - 完全自由拖拉式 DAG builder
+- 多人即時協作 flow editor
 - Team permission / RBAC
 - Cloud sync
 - Marketplace
@@ -1085,6 +1155,7 @@ Artifact 應支援：
 
 - Visual workflow builder
 - Advanced YAML/JSON editor
+- Flow diff / review / approval workflow
 - Human approval gates
 - Notion / Slack / GitHub connectors
 - Cost dashboard
@@ -1174,7 +1245,15 @@ Artifact 應支援：
 GET    /api/flows
 POST   /api/flows
 GET    /api/flows/:id
-POST   /api/runs
+PATCH  /api/flows/:id
+DELETE /api/flows/:id
+POST   /api/flows/:id/clone
+GET    /api/flows/:id/versions
+POST   /api/flows/:id/versions
+GET    /api/flows/:id/versions/:version_id
+POST   /api/flows/:id/runs
+POST   /api/runs               # compatibility alias; new UI should prefer /api/flows/:id/runs
+GET    /api/runs
 GET    /api/runs/:id
 GET    /api/runs/:id/events
 GET    /api/runs/:id/context
@@ -1184,9 +1263,16 @@ POST   /api/runs/:id/cancel
 POST   /api/runs/:id/retry-step
 GET    /api/skills
 POST   /api/skills
+GET    /api/skills/:id
+PATCH  /api/skills/:id
+DELETE /api/skills/:id
 GET    /api/skills/:id/versions/:version
 POST   /api/skills/:id/evals
 GET    /api/evals
+POST   /api/evals
+GET    /api/evals/:id
+PATCH  /api/evals/:id
+DELETE /api/evals/:id
 POST   /api/evals/run
 GET    /api/evals/:id/runs
 GET    /api/observability/runs/:id/trace
@@ -1200,21 +1286,50 @@ POST   /api/mcp/servers
 GET    /api/mcp/servers/:id/tools
 GET    /api/providers
 POST   /api/providers
+GET    /api/providers/:id
+PATCH  /api/providers/:id
+DELETE /api/providers/:id
+POST   /api/providers/:id/test
 GET    /api/policies
 POST   /api/policies
+GET    /api/policies/:id
+PATCH  /api/policies/:id
+DELETE /api/policies/:id
+GET    /api/policies/:id/versions
 GET    /api/evidence?run_id=...
+GET    /api/evidence/:id
+PATCH  /api/evidence/:id
 GET    /api/artifacts?run_id=...
+GET    /api/artifacts/:id
+PATCH  /api/artifacts/:id
+POST   /api/artifacts/:id/regenerate
+POST   /api/artifacts/:id/export
 GET    /api/learning/proposals
 POST   /api/learning/proposals/:id/approve
 ```
 
+API 設計原則：
+
+- API 必須覆蓋 command surface，不只覆蓋 read model。
+- 對可管理資產使用一致 REST shape：`GET collection`、`POST collection`、`GET item`、`PATCH item`、`DELETE item`。
+- `DELETE` 對有 audit trail 的資源應實作為 archive / disable，而不是破壞性刪除。
+- Run / Evidence / Artifact 不是任意 CRUD：Run 側重 create/read/cancel/retry/delete；Evidence 側重 review/annotate/approve/reject；Artifact 側重 version/regenerate/approve/export。
+- 會影響執行結果的資源需要 version 或 audit record，run 必須保存引用版本。
+
 ### 8.3 Storage
 
-初期可用 SQLite：
+初期可用 SQLite / D1：
 
 ```text
 flows
 flow_versions
+flow_drafts
+flow_presets
+flow_steps
+flow_edges
+flow_artifact_schemas
+flow_provider_bindings
+flow_policy_bindings
 policies
 providers
 credentials
@@ -1323,11 +1438,14 @@ Run request
 
 產品層：
 
+- 使用者能在 5 分鐘內建立或複製第一個 flow draft。
+- 使用者能發布 flow version，並從該 version 建立 run。
 - 使用者能在 5 分鐘內完成第一個 Deep Research run。
 - 使用者能清楚看懂每一步用了什麼 provider。
 - 使用者能從每個結論追到 evidence。
 - 使用者能重跑單一步驟。
 - 使用者能複製一個 preset 並調整策略。
+- 使用者能封存 flow 且仍可查看既有 runs。
 - 使用者能查看每個 run 的 trace、成本、latency、token、retry 與 tool usage。
 - 使用者能查看 flow / skill / artifact 的 eval 結果。
 - 使用者能查看每個 step 的 context composition 與 tool subset。
@@ -1348,6 +1466,7 @@ Run request
 
 商業層：
 
+- Command surface 成立，產品不被 Deep Research 單一案例綁死。
 - Deep Research 作為第一個 killer flow。
 - 後續新增 flow 不需重寫 runtime，只需新增 flow definition + step handlers。
 - 後續新增 workflow 能重用既有 skill package 與 eval suite。
@@ -1376,17 +1495,20 @@ Run request
 
 ## 11. 建議下一步
 
-1. 保持產品名稱 Agent Gateway，定位為通用 flow-based agent workflow platform。
-2. 定義 Deep Research flow 的 v1 schema。
-3. 定義 Skill package schema：`skill.yaml`、`SKILL.md`、permissions、evals。
-4. 定義 Context Management v1：context block schema、budget allocation、tool selection、compression policy。
-5. 定義 Memory System v1：procedural / episodic / semantic type、scope、write proposal、retrieval policy。
-6. 定義 Runtime Controls v1：guard rules、checkpoint schema、loop detection、escalation records。
-7. 定義 Evaluation System v1：scorecard、eval case schema、quality gates。
-8. 定義 Observability v1：trace span schema、run metrics、provider / skill / tool / context metrics。
-9. 定義 MCP server / tool discovery 與 ToolInvocation schema。
-10. 定義 Provider capability schema。
-11. 畫出 Web UI IA 與 Run wireframe。
-12. 先做 local-first MVP，不碰 cloud sync。
-13. 建立第一個 end-to-end run：topic -> assemble context -> plan skill -> select search MCP tool -> read -> extract evidence skill -> synthesize -> verify -> markdown artifact -> checkpoint / eval / trace。
-14. 讓 Learning Loop 先只 capture trace / signal / proposal，不自動修改 production skill / memory / policy。
+1. 對外產品名稱使用 Agent Platform；Agent Gateway 保留為 runtime / provider boundary 概念。
+2. 定義 Command Surface v1：Define、Configure、Run、Observe、Control、Verify、Produce、Improve 的 command、state transition、audit record。
+3. 定義 Flow Define v1 schema：Flow、FlowDraft、FlowVersion、FlowStep、FlowEdge、FlowPreset、FlowArtifactSchema、FlowProviderBinding、FlowPolicyBinding。
+4. 畫出 Web UI IA 與 Flow Library / Flow Editor / Run Detail wireframe。
+5. 定義 Deep Research seed flow 的 v1 schema，作為可複製模板。
+6. 定義 Skill package schema：`skill.yaml`、`SKILL.md`、permissions、evals。
+7. 定義 Context Management v1：context block schema、budget allocation、tool selection、compression policy。
+8. 定義 Memory System v1：procedural / episodic / semantic type、scope、write proposal、retrieval policy。
+9. 定義 Runtime Controls v1：guard rules、checkpoint schema、loop detection、escalation records。
+10. 定義 Evaluation System v1：scorecard、eval case schema、quality gates。
+11. 定義 Observability v1：trace span schema、run metrics、provider / skill / tool / context metrics。
+12. 定義 MCP server / tool discovery 與 ToolInvocation schema。
+13. 定義 Provider capability schema。
+14. 先做 local-first MVP，不碰 cloud sync。
+15. 建立第一個 end-to-end path：create/clone flow -> edit draft -> validate -> publish version -> run -> evidence -> artifacts -> trace。
+16. 建立 Deep Research run：topic -> assemble context -> plan skill -> select search MCP tool -> read -> extract evidence skill -> synthesize -> verify -> markdown artifact -> checkpoint / eval / trace。
+17. 讓 Learning Loop 先只 capture trace / signal / proposal，不自動修改 production skill / memory / policy。

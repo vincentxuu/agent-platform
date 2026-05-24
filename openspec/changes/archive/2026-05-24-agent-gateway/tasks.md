@@ -17,6 +17,8 @@
 - [x] 2.5 Implement checkpoint persistence at step boundaries with completed steps, current step, remaining steps, outputs, evidence references, artifact references, token usage, cost, and approval state.
 - [x] 2.6 Implement resume, cancel, and retry-step operations for FlowRun records.
 - [x] 2.7 Add the Deep Research v1 flow definition with Quick, Standard, and Deep presets.
+- [x] 2.8 Implement flow draft create, clone, edit, validate, publish, archive, and delete-empty-draft commands.
+- [x] 2.9 Add API coverage for `GET/POST/PATCH/DELETE /api/flows`, `POST /api/flows/:id/clone`, `POST /api/flows/:id/versions`, and `POST /api/flows/:id/runs`.
 
 ## 3. Provider And MCP Tool Routing
 
@@ -27,6 +29,7 @@
 - [x] 3.5 Implement MCP server registration and discovery of tools, resources, prompts, schemas, descriptions, and permission scopes.
 - [x] 3.6 Implement step-local tool selection that intersects flow permissions, skill permissions, provider availability, and policy constraints.
 - [x] 3.7 Persist provider calls and tool invocations with linked run ID, step ID, input/output references, status, duration, cost, tokens, retries, fallback reason, and errors.
+- [x] 3.8 Expose provider create, update, disable, re-enable, and readiness test commands through API and UI.
 
 ## 4. Skill Package System
 
@@ -36,6 +39,7 @@
 - [x] 4.4 Implement skill invocation execution context loading, including skill instructions, relevant references, allowed assets, input schema, output schema, and permissions.
 - [x] 4.5 Add built-in Deep Research skill packages for research-planner, source-ranker, citation-extractor, and report-synthesizer.
 - [x] 4.6 Persist SkillInvocation records with input references, output references, permission decisions, tool usage, status, duration, and errors.
+- [x] 4.7 Expose skill install, update, disable, eval, and flow-step binding commands through API and UI.
 
 ## 5. Policy And Runtime Controls
 
@@ -46,6 +50,7 @@
 - [x] 5.5 Implement budget guards for token, cost, runtime, iteration, tool call, and parallel unit limits.
 - [x] 5.6 Implement loop protection for repeated tool calls, similar outputs, no-progress detection, and circuit breaker state.
 - [x] 5.7 Implement escalation records for retry with better context, provider/model escalation, alternate skill or strategy, and human review marker.
+- [x] 5.8 Expose policy draft, publish/version, archive, and apply-to-flow commands through API and UI.
 
 ## 6. Context And Memory Management
 
@@ -67,6 +72,8 @@
 - [x] 7.5 Implement Markdown report artifact generation and storage.
 - [x] 7.6 Implement JSON evidence bundle artifact generation and storage.
 - [x] 7.7 Implement artifact versioning so regenerated artifacts create new versions without deleting prior versions.
+- [x] 7.8 Expose evidence approve, reject, and annotate commands through API and UI.
+- [x] 7.9 Expose artifact approve, reject, regenerate, and export commands through API and UI.
 
 ## 8. Evaluation And Learning Loop
 
@@ -78,6 +85,7 @@
 - [x] 8.6 Implement learning signal capture for user correction, verifier failure, provider failure, retry success, cost outlier, and manual feedback.
 - [x] 8.7 Implement reviewable proposal records for memory updates, skill changes, policy suggestions, and new eval cases.
 - [x] 8.8 Ensure skill publication or promotion is blocked when required quality gates fail.
+- [x] 8.9 Expose eval case creation from failed/corrected runs and reviewable improvement proposal commands through API and UI.
 
 ## 9. Web UI
 
@@ -88,7 +96,9 @@
 - [x] 9.5 Implement context snapshot view showing selected context blocks, budgets, tool descriptions, compression records, and memory injections.
 - [x] 9.6 Implement evidence viewer showing sources, excerpts, claims, citations, confidence, conflicts, and linked artifacts.
 - [x] 9.7 Implement artifact viewer for Markdown reports and JSON evidence bundles with version history and export actions.
-- [x] 9.8 Implement initial management views for flows, skills, providers, policies, memory, evals, observability, evidence, and artifacts.
+- [x] 9.8 Implement initial read-only management views for flows, skills, providers, policies, memory, evals, observability, evidence, and artifacts.
+- [x] 9.9 Replace read-only management panels with command-complete surfaces for Define, Configure, Control, Verify, Produce, and Improve.
+- [x] 9.10 Ensure empty states and primary actions lead to commands such as Create Flow, Clone Deep Research, Test Provider, Publish Policy, Run Eval, Regenerate Artifact, or Create Improvement Proposal.
 
 ## 10. Integration And Verification
 
@@ -101,3 +111,4 @@
 - [x] 10.7 Add tests for evidence linking, artifact versioning, metrics derivation, and run trace inspection.
 - [x] 10.8 Add tests for eval execution, learning signal capture, reviewable proposal creation, and quality gate enforcement.
 - [x] 10.9 Run OpenSpec validation for the `agent-gateway` change and fix any proposal, design, spec, or task format issues.
+- [x] 10.10 Add end-to-end tests for create/clone/edit/validate/publish flow, provider test/disable, policy publish/apply, skill eval/bind, evidence approval, artifact regenerate/export, and improvement proposal creation.

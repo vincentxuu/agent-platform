@@ -3,9 +3,13 @@
 ### Requirement: Versioned flow definitions
 The system SHALL define flows as versioned templates containing input schema, presets, steps, edges, allowed capabilities, and artifact schemas.
 
-#### Scenario: Create a runnable flow version
-- **WHEN** an operator creates a Deep Research flow with required inputs, presets, steps, edges, and artifacts
-- **THEN** the system stores an immutable flow version that can be selected for new runs
+#### Scenario: Define a runnable flow version
+- **WHEN** a user creates or clones a flow draft, edits required inputs, presets, steps, edges, provider bindings, policy references, skill bindings, and artifact schemas, then publishes it
+- **THEN** the system validates the draft and stores an immutable flow version that can be selected for new runs
+
+#### Scenario: Reject invalid flow publication
+- **WHEN** a user tries to publish a flow draft with missing inputs, broken edges, unresolved skill bindings, unavailable providers, invalid policy references, or invalid artifact schemas
+- **THEN** the system rejects publication and reports the validation errors without creating a runnable version
 
 #### Scenario: Preserve run reproducibility
 - **WHEN** a run starts from a flow version and preset

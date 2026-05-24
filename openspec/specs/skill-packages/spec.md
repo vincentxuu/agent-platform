@@ -1,7 +1,18 @@
-## ADDED Requirements
+## Purpose
+Define versioned skill packages, explicit bindings, invocation tracking, and built-in Deep Research skill behavior.
+
+## Requirements
 
 ### Requirement: Versioned skill package structure
 The system SHALL load skills from versioned packages containing `skill.yaml`, `SKILL.md`, and optional references, scripts, assets, and evals.
+
+#### Scenario: Install or update skill package
+- **WHEN** an operator installs or updates a skill package
+- **THEN** the system validates metadata, permissions, schemas, eval references, and version information before making the skill available for flow-step binding
+
+#### Scenario: Disable skill package
+- **WHEN** an operator disables a skill package used by existing flow versions
+- **THEN** the system prevents new flow publications or runs from binding that disabled skill while preserving prior run audit records
 
 #### Scenario: Load a valid skill package
 - **WHEN** a skill package includes valid metadata, instructions, permissions, and version information
