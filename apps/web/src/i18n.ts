@@ -6,6 +6,26 @@ export const resources = {
   "zh-Hant": {
     translation: {
       nav: {
+        skipToContent: "跳到主要內容",
+        console: "工作流控制台",
+        primary: "主要導覽",
+        startRun: "開始新的 Run",
+        runtime: "Runtime",
+        groups: {
+          workspace: "工作區",
+          operations: "執行監控",
+          review: "驗證與管理"
+        },
+        descriptions: {
+          run: "建立與啟動工作流",
+          define: "編輯 Flow 草稿與版本",
+          timeline: "追蹤步驟與控制 run",
+          observability: "查看成本、工具與 trace",
+          context: "檢查上下文與記憶",
+          evidence: "核准、拒絕與註記證據",
+          artifacts: "再生、審核與匯出產物",
+          manage: "設定 provider、policy、skill"
+        },
         run: "執行",
         define: "定義",
         timeline: "時間線",
@@ -168,6 +188,26 @@ export const resources = {
   en: {
     translation: {
       nav: {
+        skipToContent: "Skip to main content",
+        console: "Workflow Console",
+        primary: "Primary navigation",
+        startRun: "Start New Run",
+        runtime: "Runtime",
+        groups: {
+          workspace: "Workspace",
+          operations: "Operations",
+          review: "Review And Admin"
+        },
+        descriptions: {
+          run: "Create and start workflows",
+          define: "Edit flow drafts and versions",
+          timeline: "Track steps and control runs",
+          observability: "Inspect cost, tools, and traces",
+          context: "Review context and memory",
+          evidence: "Approve, reject, and annotate evidence",
+          artifacts: "Regenerate, review, and export outputs",
+          manage: "Configure providers, policies, and skills"
+        },
         run: "Run",
         define: "Define",
         timeline: "Timeline",

@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { Boxes, CirclePlay, FileText, Gauge, History, Layers3, Settings2, ShieldCheck } from "lucide-react";
+import { Badge } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
+import { Input } from "./components/ui/input";
+import { Label } from "./components/ui/label";
+import { Select } from "./components/ui/select";
+import { Textarea } from "./components/ui/textarea";
 
 type RunStatus = "queued" | "running" | "complete" | "failed" | "canceled";
 
@@ -124,10 +132,37 @@ type ManagementConfig = {
   }>;
 };
 
+const navGroups = [
+  {
+    key: "workspace",
+    items: [
+      { id: "run", key: "run", badge: "01", icon: CirclePlay },
+      { id: "define", key: "define", badge: "02", icon: Layers3 }
+    ]
+  },
+  {
+    key: "operations",
+    items: [
+      { id: "timeline", key: "timeline", badge: "03", icon: History },
+      { id: "observability", key: "observability", badge: "04", icon: Gauge },
+      { id: "context", key: "context", badge: "05", icon: Boxes }
+    ]
+  },
+  {
+    key: "review",
+    items: [
+      { id: "evidence", key: "evidence", badge: "06", icon: ShieldCheck },
+      { id: "artifacts", key: "artifacts", badge: "07", icon: FileText },
+      { id: "manage", key: "manage", badge: "08", icon: Settings2 }
+    ]
+  }
+] as const;
+
 export function App() {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const [selectedRunId, setSelectedRunId] = useState<string>();
+  const [activeSection, setActiveSection] = useState("run");
   const [topic, setTopic] = useState("代理工作流編排");
   const [audience, setAudience] = useState("工程管理者");
   const [freshnessDays, setFreshnessDays] = useState(365);
@@ -173,6 +208,30 @@ export function App() {
     }
   }, [runs.data, selectedRunId]);
 
+  useEffect(() => {
+    const sectionIds = navGroups.flatMap((group) => group.items.map((item) => item.id));
+    const updateFromHash = () => {
+      const hashId = window.location.hash.replace("#", "");
+      if (sectionIds.includes(hashId as typeof sectionIds[number])) setActiveSection(hashId);
+    };
+    updateFromHash();
+    window.addEventListener("hashchange", updateFromHash);
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (visible?.target.id) setActiveSection(visible.target.id);
+    }, { rootMargin: "-18% 0px -68% 0px", threshold: [0.12, 0.4] });
+    for (const id of sectionIds) {
+      const element = document.getElementById(id);
+      if (element) observer.observe(element);
+    }
+    return () => {
+      window.removeEventListener("hashchange", updateFromHash);
+      observer.disconnect();
+    };
+  }, []);
+
   const startRun = useMutation({
     mutationFn: () => apiPost(`/api/flows/${selectedFlowId}/runs`, {
       presetId,
@@ -212,61 +271,93 @@ export function App() {
 
   return (
     <main className="shell">
+      <a className="skip-link" href="#run">{t("nav.skipToContent")}</a>
       <aside className="sidebar">
-        <h1>Agent Platform</h1>
-        <nav>
-          <a href="#run">{t("nav.run")}</a>
-          <a href="#define">{t("nav.define")}</a>
-          <a href="#timeline">{t("nav.timeline")}</a>
-          <a href="#observability">{t("nav.observability")}</a>
-          <a href="#context">{t("nav.context")}</a>
-          <a href="#evidence">{t("nav.evidence")}</a>
-          <a href="#artifacts">{t("nav.artifacts")}</a>
-          <a href="#manage">{t("nav.manage")}</a>
+        <div className="sidebar-inner">
+          <div className="brand-block">
+            <div className="brand-mark" aria-hidden="true">AP</div>
+            <div>
+              <h1>Agent Platform</h1>
+              <p>{t("nav.console")}</p>
+            </div>
+          </div>
+          <a className="sidebar-primary-action" href="#run">
+            <span>{t("nav.startRun")}</span>
+            <strong>{activeRun?.status ? t(`statuses.${activeRun.status}`, activeRun.status) : t("statuses.idle")}</strong>
+          </a>
+          <nav className="sidebar-nav" aria-label={t("nav.primary")}>
+            {navGroups.map((group) => (
+              <div className="nav-group" key={group.key}>
+                <p className="nav-group-label">{t(`nav.groups.${group.key}`)}</p>
+                {group.items.map((item) => (
+                  <a
+                    key={item.id}
+                    href={`#${item.id}`}
+                    className={activeSection === item.id ? "active" : ""}
+                    aria-current={activeSection === item.id ? "page" : undefined}
+                  >
+                    <span className="nav-badge" aria-hidden="true">
+                      <item.icon size={15} strokeWidth={2.2} />
+                    </span>
+                    <span>
+                      <strong>{t(`nav.${item.key}`)}</strong>
+                      <small>{item.badge} · {t(`nav.descriptions.${item.key}`)}</small>
+                    </span>
+                  </a>
+                ))}
+              </div>
+            ))}
         </nav>
-        <label className="language-switcher">
-          {t("language.label")}
-          <select value={i18n.resolvedLanguage || i18n.language} onChange={(event) => void i18n.changeLanguage(event.target.value)}>
-            <option value="zh-Hant">{t("language.zhHant")}</option>
-            <option value="en">{t("language.en")}</option>
-          </select>
-        </label>
+          <div className="sidebar-footer">
+            <div className="runtime-pill">
+              <span>{t("nav.runtime")}</span>
+              <strong>{runtimeLabel(health.data?.runtime, t)}</strong>
+            </div>
+            <Label className="language-switcher">
+              <span>{t("language.label")}</span>
+              <Select value={i18n.resolvedLanguage || i18n.language} onChange={(event) => void i18n.changeLanguage(event.target.value)}>
+                <option value="zh-Hant">{t("language.zhHant")}</option>
+                <option value="en">{t("language.en")}</option>
+              </Select>
+            </Label>
+          </div>
+        </div>
       </aside>
 
-      <section className="workspace">
+      <section className="workspace" id="main-content">
         <section id="run" className="panel">
           <div className="panel-heading">
             <div>
               <h2>{t("run.title")}</h2>
               <p className="muted">{t("run.subtitle")}</p>
             </div>
-            <span id="runtime-status" className="status">{runtimeLabel(health.data?.runtime, t)}</span>
+            <Badge id="runtime-status" variant="success">{runtimeLabel(health.data?.runtime, t)}</Badge>
           </div>
           <form className="run-form" onSubmit={(event) => {
             event.preventDefault();
             startRun.mutate();
           }}>
-            <label>
+            <Label>
               {t("run.flow")}
-              <select id="flow-select" value={selectedFlowId} onChange={(event) => {
+              <Select id="flow-select" value={selectedFlowId} onChange={(event) => {
                 setSelectedFlowId(event.target.value);
                 const nextFlow = flowList.find((flow) => flow.id === event.target.value);
                 if (nextFlow?.presets?.[0]?.id) setPresetId(nextFlow.presets[0].id);
               }}>
                 {flowList.map((flow) => <option key={flow.id} value={flow.id}>{flow.name}</option>)}
-              </select>
-            </label>
-            <label>
+              </Select>
+            </Label>
+            <Label>
               {t("run.topic")}
-              <input id="topic-input" value={topic} onChange={(event) => setTopic(event.target.value)} />
-            </label>
-            <label>
+              <Input id="topic-input" value={topic} onChange={(event) => setTopic(event.target.value)} />
+            </Label>
+            <Label>
               {t("run.audience")}
-              <input id="audience-input" value={audience} onChange={(event) => setAudience(event.target.value)} />
-            </label>
-            <label>
+              <Input id="audience-input" value={audience} onChange={(event) => setAudience(event.target.value)} />
+            </Label>
+            <Label>
               {t("run.freshnessDays")}
-              <input
+              <Input
                 id="freshness-input"
                 type="number"
                 min="1"
@@ -274,23 +365,23 @@ export function App() {
                 value={freshnessDays}
                 onChange={(event) => setFreshnessDays(Number(event.target.value))}
               />
-            </label>
-            <label>
+            </Label>
+            <Label>
               {t("run.preset")}
-              <select id="preset-select" value={presetId} onChange={(event) => setPresetId(event.target.value)}>
+              <Select id="preset-select" value={presetId} onChange={(event) => setPresetId(event.target.value)}>
                 {(activeFlow?.presets || [{ id: "standard", name: t("run.standard") }]).map((preset) => (
                   <option key={preset.id} value={preset.id}>{preset.name}</option>
                 ))}
-              </select>
-            </label>
-            <button type="submit" disabled={startRun.isPending}>{startRun.isPending ? t("run.starting") : t("run.start")}</button>
+              </Select>
+            </Label>
+            <Button type="submit" disabled={startRun.isPending}>{startRun.isPending ? t("run.starting") : t("run.start")}</Button>
           </form>
           {runError ? <div className="error-box">{runError}</div> : null}
           <pre className="summary">{JSON.stringify(policySummary, null, 2)}</pre>
           <div className="subsection">
             <div className="panel-heading compact">
               <h3>{t("run.recentRuns")}</h3>
-              <button type="button" className="secondary" onClick={() => clearRuns.mutate()} disabled={clearRuns.isPending}>{t("run.clear")}</button>
+              <Button type="button" variant="secondary" onClick={() => clearRuns.mutate()} disabled={clearRuns.isPending}>{t("run.clear")}</Button>
             </div>
             <RunHistory runs={runs.data?.runs || []} selectedRunId={selectedRunId} onSelect={setSelectedRunId} />
           </div>
@@ -304,8 +395,8 @@ export function App() {
           <div className="panel-heading">
             <h2>{t("timeline.title")}</h2>
             <div className="button-row">
-              <button type="button" onClick={() => retryRun.mutate({})} disabled={!selectedRunId || retryRun.isPending}>{t("timeline.retry")}</button>
-              <button type="button" className="secondary" onClick={() => cancelRun.mutate({})} disabled={!selectedRunId || cancelRun.isPending}>{t("timeline.cancel")}</button>
+              <Button type="button" onClick={() => retryRun.mutate({})} disabled={!selectedRunId || retryRun.isPending}>{t("timeline.retry")}</Button>
+              <Button type="button" variant="secondary" onClick={() => cancelRun.mutate({})} disabled={!selectedRunId || cancelRun.isPending}>{t("timeline.cancel")}</Button>
             </div>
           </div>
           <Timeline run={activeRun} />
@@ -351,10 +442,10 @@ function RunHistory({ runs, selectedRunId, onSelect }: { runs: RunView[]; select
   return (
     <div className="run-history">
       {runs.map((run) => (
-        <button key={run.id} type="button" className={run.id === selectedRunId ? "history-item active" : "history-item"} onClick={() => onSelect(run.id)}>
+        <Button key={run.id} type="button" variant="secondary" className={run.id === selectedRunId ? "history-item active !grid !justify-stretch !whitespace-normal" : "history-item !grid !justify-stretch !whitespace-normal"} onClick={() => onSelect(run.id)}>
           <strong>{run.topic}</strong>
           <span>{t(`statuses.${run.status}`, run.status)} · {run.presetId} · {new Date(run.createdAt).toLocaleString()}</span>
-        </button>
+        </Button>
       ))}
     </div>
   );
@@ -435,29 +526,29 @@ function FlowDefine({ flows, selectedFlowId, onSelect }: { flows: FlowSummary[];
           <p className="muted">{t("define.subtitle")}</p>
         </div>
         <div className="button-row">
-          <button type="button" onClick={() => createFlow.mutate()} disabled={createFlow.isPending}>{t("define.create")}</button>
-          <button type="button" className="secondary" onClick={() => cloneFlow.mutate()} disabled={cloneFlow.isPending}>{t("define.clone")}</button>
+          <Button type="button" onClick={() => createFlow.mutate()} disabled={createFlow.isPending}>{t("define.create")}</Button>
+          <Button type="button" variant="secondary" onClick={() => cloneFlow.mutate()} disabled={cloneFlow.isPending}>{t("define.clone")}</Button>
         </div>
       </div>
       <div className="flow-command-grid">
         <aside className="flow-list">
           {flows.map((flow) => (
-            <button key={flow.id} type="button" className={flow.id === selectedFlowId ? "history-item active" : "history-item"} onClick={() => onSelect(flow.id)}>
+            <Button key={flow.id} type="button" variant="secondary" className={flow.id === selectedFlowId ? "history-item active !grid !justify-stretch !whitespace-normal" : "history-item !grid !justify-stretch !whitespace-normal"} onClick={() => onSelect(flow.id)}>
               <strong>{flow.name}</strong>
               <span>{flow.status} · v{flow.version || 0} · {flow.steps?.length || 0} steps</span>
-            </button>
+            </Button>
           ))}
         </aside>
         <div className="flow-editor">
           <div className="card-heading">
             <h3>{selected.name}</h3>
-            <span className="status">{selected.hasDraft ? t("define.draft") : `${t("define.version")} ${selected.version}`}</span>
+            <Badge variant="success">{selected.hasDraft ? t("define.draft") : `${t("define.version")} ${selected.version}`}</Badge>
           </div>
-          <textarea rows={18} value={draftText} onChange={(event) => setDraftText(event.target.value)} disabled={selected.source === "built-in" && !selected.hasDraft} />
+          <Textarea rows={18} value={draftText} onChange={(event) => setDraftText(event.target.value)} disabled={selected.source === "built-in" && !selected.hasDraft} />
           <div className="button-row">
-            <button type="button" onClick={() => saveDraft.mutate()} disabled={saveDraft.isPending || selected.source === "built-in"}>{t("define.save")}</button>
-            <button type="button" onClick={() => publishDraft.mutate()} disabled={publishDraft.isPending || !selected.hasDraft}>{t("define.publish")}</button>
-            <button type="button" className="secondary" onClick={() => archiveFlow.mutate()} disabled={archiveFlow.isPending || selected.source === "built-in"}>{t("define.archive")}</button>
+            <Button type="button" onClick={() => saveDraft.mutate()} disabled={saveDraft.isPending || selected.source === "built-in"}>{t("define.save")}</Button>
+            <Button type="button" onClick={() => publishDraft.mutate()} disabled={publishDraft.isPending || !selected.hasDraft}>{t("define.publish")}</Button>
+            <Button type="button" variant="secondary" onClick={() => archiveFlow.mutate()} disabled={archiveFlow.isPending || selected.source === "built-in"}>{t("define.archive")}</Button>
           </div>
           {commandResult ? <pre className="summary compact">{commandResult}</pre> : null}
         </div>
@@ -511,21 +602,25 @@ function Evidence({ runId, evidence }: { runId?: string; evidence: EvidenceItem[
   return (
     <div className="grid">
       {evidence.map((item, index) => (
-        <article className="card" key={`${item.source}-${index}`}>
-          <div className="card-heading">
-            <h3>{item.sourceTitle || item.source}</h3>
-            <span className="status">{item.confidence}</span>
-          </div>
+        <Card className="card" key={`${item.source}-${index}`}>
+          <CardHeader className="pb-3">
+            <div className="card-heading">
+              <CardTitle>{item.sourceTitle || item.source}</CardTitle>
+              <Badge variant="outline">{item.confidence}</Badge>
+            </div>
+          </CardHeader>
+          <CardContent>
           <p>{item.claim}</p>
           <p className="muted">{item.excerpt}</p>
           <a href={item.sourceUrl} target="_blank" rel="noreferrer">{item.sourceUrl}</a>
           <div className="button-row">
-            <button type="button" className="secondary" onClick={() => review.mutate({ index, status: "accepted", note: t("evidence.approvedNote") })}>{t("evidence.approve")}</button>
-            <button type="button" className="secondary" onClick={() => review.mutate({ index, status: "rejected", note: t("evidence.rejectedNote") })}>{t("evidence.reject")}</button>
-            <button type="button" className="secondary" onClick={() => review.mutate({ index, status: "watch", note: t("evidence.annotatedNote") })}>{t("evidence.annotate")}</button>
+            <Button type="button" variant="secondary" onClick={() => review.mutate({ index, status: "accepted", note: t("evidence.approvedNote") })}>{t("evidence.approve")}</Button>
+            <Button type="button" variant="secondary" onClick={() => review.mutate({ index, status: "rejected", note: t("evidence.rejectedNote") })}>{t("evidence.reject")}</Button>
+            <Button type="button" variant="secondary" onClick={() => review.mutate({ index, status: "watch", note: t("evidence.annotatedNote") })}>{t("evidence.annotate")}</Button>
           </div>
           {item.review ? <small>{t("evidence.review")}: {item.review.status} · {item.review.note}</small> : null}
-        </article>
+          </CardContent>
+        </Card>
       ))}
     </div>
   );
@@ -543,15 +638,18 @@ function Artifacts({ runId, artifacts }: { runId?: string; artifacts: ArtifactIt
   return (
     <>
       <div className="button-row section-actions">
-        <button type="button" onClick={() => regenerate.mutate()} disabled={regenerate.isPending}>{t("artifacts.regenerate")}</button>
+        <Button type="button" onClick={() => regenerate.mutate()} disabled={regenerate.isPending}>{t("artifacts.regenerate")}</Button>
       </div>
       <div className="grid">
         {artifacts.length === 0 ? <div className="empty">{t("artifacts.empty")}</div> : artifacts.map((artifact) => (
-          <article className="card" key={artifact.id}>
-            <div className="card-heading">
-              <h3>{artifact.name}</h3>
-              <span className="status">{artifact.type} v{artifact.version || 1}</span>
-            </div>
+          <Card className="card" key={artifact.id}>
+            <CardHeader className="pb-3">
+              <div className="card-heading">
+                <CardTitle>{artifact.name}</CardTitle>
+                <Badge variant="outline">{artifact.type} v{artifact.version || 1}</Badge>
+              </div>
+            </CardHeader>
+            <CardContent>
             <pre className="summary compact">{JSON.stringify(artifact.content || artifact, null, 2)}</pre>
             <div className="button-row">
               <a className="button-link" href={artifact.downloadUrl}>{t("artifacts.download")}</a>
@@ -559,7 +657,8 @@ function Artifacts({ runId, artifacts }: { runId?: string; artifacts: ArtifactIt
               <ArtifactReviewButton runId={runId} artifact={artifact} status="rejected" label={t("artifacts.reject")} />
               <ArtifactVersionButton runId={runId} artifactId={artifact.id} />
             </div>
-          </article>
+            </CardContent>
+          </Card>
         ))}
       </div>
     </>
@@ -581,7 +680,7 @@ function ArtifactReviewButton({ runId, artifact, status, label }: { runId: strin
     }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["run", runId] })
   });
-  return <button type="button" className="secondary" onClick={() => review.mutate()} disabled={review.isPending}>{label}</button>;
+  return <Button type="button" variant="secondary" onClick={() => review.mutate()} disabled={review.isPending}>{label}</Button>;
 }
 
 function ArtifactVersionButton({ runId, artifactId }: { runId: string; artifactId: string }) {
@@ -589,10 +688,10 @@ function ArtifactVersionButton({ runId, artifactId }: { runId: string; artifactI
   const [diff, setDiff] = useState<string>("");
   return (
     <>
-      <button type="button" className="secondary" onClick={async () => {
+      <Button type="button" variant="secondary" onClick={async () => {
         const payload = await apiGet(`/api/runs/${runId}/artifacts/${artifactId}/diff`).catch((error) => ({ error: error.message }));
         setDiff(JSON.stringify(payload.diff || payload, null, 2));
-      }}>{t("artifacts.diff")}</button>
+      }}>{t("artifacts.diff")}</Button>
       {diff ? <pre className="summary compact">{diff}</pre> : null}
     </>
   );
@@ -622,47 +721,67 @@ function Management({ config, readiness, skills }: { config?: ManagementConfig; 
   if (!config) return <div className="empty">{t("manage.loading")}</div>;
   return (
     <div className="management">
-      <article className="card">
-        <h3>{t("manage.openSourceRuntime")}</h3>
-        <p>{t("manage.localUsable")}：{String(readiness?.usableNow)} · {t("manage.cloudflareDeployReady")}：{String(readiness?.cloudflare?.deployReady)}</p>
-      </article>
-      <article className="card">
-        <h3>{t("manage.policies")}</h3>
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("manage.openSourceRuntime")}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p>{t("manage.localUsable")}：{String(readiness?.usableNow)} · {t("manage.cloudflareDeployReady")}：{String(readiness?.cloudflare?.deployReady)}</p>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("manage.policies")}</CardTitle>
+        </CardHeader>
+        <CardContent>
         <div className="grid tight">
           {(config.policies || []).map((policy) => <PolicyCard key={policy.id} policy={policy} />)}
         </div>
-      </article>
-      <article className="card">
-        <div className="card-heading">
-          <h3>{t("manage.improvements")}</h3>
-          <button type="button" className="secondary" onClick={() => createImprovement.mutate()} disabled={createImprovement.isPending}>{t("manage.createImprovement")}</button>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <div className="card-heading">
+          <CardTitle>{t("manage.improvements")}</CardTitle>
+          <Button type="button" variant="secondary" onClick={() => createImprovement.mutate()} disabled={createImprovement.isPending}>{t("manage.createImprovement")}</Button>
         </div>
+        </CardHeader>
+        <CardContent>
         <div className="grid tight">
           {(config.improvementProposals || []).map((proposal) => (
             <InfoCard key={proposal.id} title={proposal.summary} meta={`${proposal.type} · ${proposal.status}`} body={`${proposal.evalCase.id} · ${proposal.evalCase.status}`} />
           ))}
           {(config.improvementProposals || []).length === 0 ? <div className="empty">{t("manage.noImprovements")}</div> : null}
         </div>
-      </article>
-      <article className="card">
-        <div className="card-heading">
-          <h3>{t("manage.providers")}</h3>
-          <button type="button" className="secondary" onClick={() => createProvider.mutate()} disabled={createProvider.isPending}>{t("manage.createProvider")}</button>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <div className="card-heading">
+          <CardTitle>{t("manage.providers")}</CardTitle>
+          <Button type="button" variant="secondary" onClick={() => createProvider.mutate()} disabled={createProvider.isPending}>{t("manage.createProvider")}</Button>
         </div>
+        </CardHeader>
+        <CardContent>
         <div className="provider-list">
           {config.providers.map((provider) => (
             <ProviderRow key={provider.id} provider={provider} allowed={config.policy.allowedProviders.includes(provider.id)} />
           ))}
         </div>
-      </article>
-      <article className="card">
-        <h3>{t("manage.skillVersions")}</h3>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("manage.skillVersions")}</CardTitle>
+        </CardHeader>
+        <CardContent>
         <div className="grid tight">
           {(skills?.skills || config.skills).map((skill: ManagementConfig["skills"][number]) => (
             <SkillCard key={skill.id} skill={skill} />
           ))}
         </div>
-      </article>
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -686,18 +805,22 @@ function PolicyCard({ policy }: { policy: NonNullable<ManagementConfig["policies
     }
   });
   return (
-    <article className="card skill-card">
-      <div className="card-heading">
-        <h3>{policy.name}</h3>
-        <span className="status">{policy.status} v{policy.version}</span>
-      </div>
+    <Card className="skill-card">
+      <CardHeader className="pb-3">
+        <div className="card-heading">
+          <CardTitle>{policy.name}</CardTitle>
+          <Badge variant="outline">{policy.status} v{policy.version}</Badge>
+        </div>
+      </CardHeader>
+      <CardContent>
       <p>${policy.draft.maxCostUsd} · {policy.draft.maxIterations} iterations · {policy.draft.allowedProviders.join(", ")}</p>
       <div className="button-row">
-        <button type="button" className="secondary" onClick={() => publish.mutate()} disabled={publish.isPending}>{t("manage.publishPolicy")}</button>
-        <button type="button" className="secondary" onClick={() => apply.mutate()} disabled={apply.isPending}>{t("manage.applyPolicy")}</button>
+        <Button type="button" variant="secondary" onClick={() => publish.mutate()} disabled={publish.isPending}>{t("manage.publishPolicy")}</Button>
+        <Button type="button" variant="secondary" onClick={() => apply.mutate()} disabled={apply.isPending}>{t("manage.applyPolicy")}</Button>
       </div>
       {result ? <small>{result}</small> : null}
-    </article>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -719,21 +842,25 @@ function SkillCard({ skill }: { skill: ManagementConfig["skills"][number] }) {
     onError: (error) => setResult(error instanceof Error ? error.message : t("manage.evalBlocked"))
   });
   return (
-    <article className="card skill-card">
-      <div className="card-heading">
-        <h3>{skill.name}</h3>
-        <span className="status">{skill.activeVersion} · {skill.source}</span>
-      </div>
+    <Card className="skill-card">
+      <CardHeader className="pb-3">
+        <div className="card-heading">
+          <CardTitle>{skill.name}</CardTitle>
+          <Badge variant="outline">{skill.activeVersion} · {skill.source}</Badge>
+        </div>
+      </CardHeader>
+      <CardContent>
       <p>{skill.description}</p>
       <small>{skill.enabled ? t("manage.enabled") : t("manage.disabled")} · {skill.evals.join(", ")}</small>
       <div className="button-row">
-        <button type="button" className="secondary" onClick={() => toggleSkill.mutate()} disabled={toggleSkill.isPending}>
+        <Button type="button" variant="secondary" onClick={() => toggleSkill.mutate()} disabled={toggleSkill.isPending}>
           {skill.enabled ? t("manage.disable") : t("manage.enable")}
-        </button>
-        <button type="button" className="secondary" onClick={() => runEval.mutate()} disabled={runEval.isPending}>{t("manage.runEval")}</button>
+        </Button>
+        <Button type="button" variant="secondary" onClick={() => runEval.mutate()} disabled={runEval.isPending}>{t("manage.runEval")}</Button>
       </div>
       {result ? <small>{result}</small> : null}
-    </article>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -754,14 +881,14 @@ function ProviderRow({ provider, allowed }: { provider: ManagementConfig["provid
       <span>{provider.enabled ? t("manage.enabled") : t("manage.disabled")} · {allowed ? t("manage.policyAllowed") : t("manage.blocked")}</span>
       <span>{provider.activeModel}</span>
       <code>{provider.credentialRef}</code>
-      <button type="button" className="secondary" onClick={() => toggleProvider.mutate()} disabled={toggleProvider.isPending}>
+      <Button type="button" variant="secondary" onClick={() => toggleProvider.mutate()} disabled={toggleProvider.isPending}>
         {provider.enabled ? t("manage.disable") : t("manage.enable")}
-      </button>
-      <button type="button" className="secondary" onClick={async () => {
+      </Button>
+      <Button type="button" variant="secondary" onClick={async () => {
         setResult(t("manage.testing"));
         const payload = await apiPost(`/api/providers/${provider.id}/test`, {}).catch((error) => ({ detail: error.message }));
         setResult(payload.ready ? t("manage.ready", { model: payload.activeModel }) : t("manage.notReady", { detail: payload.detail || payload.error }));
-      }}>{t("manage.test")}</button>
+      }}>{t("manage.test")}</Button>
       {result ? <small className="provider-test-result">{result}</small> : null}
     </div>
   );
@@ -769,13 +896,17 @@ function ProviderRow({ provider, allowed }: { provider: ManagementConfig["provid
 
 function InfoCard({ title, meta, body }: { title: string; meta?: string; body: string }) {
   return (
-    <article className="card">
-      <div className="card-heading">
-        <h3>{title}</h3>
-        {meta ? <span className="status">{meta}</span> : null}
-      </div>
-      <p>{body}</p>
-    </article>
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="card-heading">
+          <CardTitle>{title}</CardTitle>
+          {meta ? <Badge variant="secondary">{meta}</Badge> : null}
+        </div>
+      </CardHeader>
+      <CardContent>
+        <p>{body}</p>
+      </CardContent>
+    </Card>
   );
 }
 
