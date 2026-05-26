@@ -65,6 +65,7 @@ export function createProviderConfigs(env = {}, options = {}) {
   return PROVIDER_MODEL_CATALOG.map((provider) => ({
     id: provider.id,
     name: provider.name,
+    type: provider.type,
     enabled: Boolean(provider.enabled),
     credentialRef: provider.credentialRefs.join(" or "),
     models: [...provider.models],

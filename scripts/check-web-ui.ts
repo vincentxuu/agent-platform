@@ -80,8 +80,8 @@ try {
   for (const [index, [id, type, skill, providerRole]] of arxivSteps.entries()) {
     await page.locator("#step-id-input").fill(id);
     await page.locator("#step-type-select").selectOption(type);
-    await page.locator("#step-skill-input").fill(skill);
-    await page.locator("#step-provider-role-input").fill(providerRole);
+    await page.locator("#step-skill-input").selectOption(skill);
+    await page.locator("#step-provider-role-input").selectOption(providerRole);
     await page.getByRole("button", { name: "Add Step" }).click();
     await page.waitForFunction((count) => document.querySelectorAll(".flow-step-chip").length >= count, index + 1);
   }

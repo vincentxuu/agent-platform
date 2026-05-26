@@ -9,6 +9,7 @@ import { Input } from "./components/ui/input";
 import { Label } from "./components/ui/label";
 import { Select } from "./components/ui/select";
 import { Textarea } from "./components/ui/textarea";
+import { cn } from "./lib/utils";
 
 type RunStatus = "queued" | "running" | "complete" | "failed" | "canceled";
 
@@ -71,7 +72,7 @@ type FlowSummary = {
   version: number;
   hasDraft?: boolean;
   presets: Array<{ id: string; name: string }>;
-  steps: Array<{ id: string; type: string; skill?: string; providerRole?: string }>;
+  steps: Array<{ id: string; type: string; skill?: string; providerRole?: string; providerId?: string; model?: string }>;
   artifacts: Array<{ id: string; type: string }>;
   definition?: Record<string, unknown>;
   draft?: Record<string, unknown>;
@@ -116,6 +117,7 @@ type ManagementConfig = {
   providers: Array<{
     id: string;
     name: string;
+    type: string;
     enabled: boolean;
     credentialRef: string;
     credentialConfigured?: boolean;
@@ -150,6 +152,24 @@ const stepStarterCards = [
 const artifactStarterCards = [
   { id: "markdown_report", type: "markdown_report", labelKey: "markdownReport", detailKey: "markdownReportDetail" },
   { id: "evidence_bundle", type: "json_evidence_bundle", labelKey: "evidenceBundle", detailKey: "evidenceBundleDetail" }
+] as const;
+
+const stepSkillOptions = [
+  { value: "", labelKey: "noneOption" },
+  { value: "research-planner@1.0.0", labelKey: "researchPlannerSkill" },
+  { value: "source-ranker@1.0.0", labelKey: "sourceRankerSkill" },
+  { value: "citation-extractor@1.0.0", labelKey: "citationExtractorSkill" },
+  { value: "report-synthesizer@1.0.0", labelKey: "reportSynthesizerSkill" },
+  { value: "__custom__", labelKey: "customOption" }
+] as const;
+
+const providerRoleOptions = [
+  { value: "", labelKey: "noneOption" },
+  { value: "llm", labelKey: "llmRole" },
+  { value: "search", labelKey: "searchRole" },
+  { value: "reader", labelKey: "readerRole" },
+  { value: "artifact", labelKey: "artifactRole" },
+  { value: "__custom__", labelKey: "customOption" }
 ] as const;
 
 const navGroups = [
@@ -287,8 +307,8 @@ export function App() {
           <div className="brand-block">
             <div className="brand-mark" aria-hidden="true">AP</div>
             <div>
-              <h1>Agent Platform</h1>
-              <p>{t("nav.console")}</p>
+              <h1 className="m-0 text-[17px] font-semibold leading-tight">Agent Platform</h1>
+              <p className="m-0 mt-0.5 text-xs text-muted-foreground">{t("nav.console")}</p>
             </div>
           </div>
           <a className="sidebar-primary-action" href="#run">
@@ -338,7 +358,7 @@ export function App() {
         {activeSection === "run" ? <section id="run" className="panel">
           <div className="panel-heading">
             <div>
-              <h2>{t("run.title")}</h2>
+              <h2 className="mb-3 text-xl font-semibold tracking-normal">{t("run.title")}</h2>
               <p className="muted">{t("run.subtitle")}</p>
             </div>
             <Badge id="runtime-status" variant="success">{runtimeLabel(health.data?.runtime, t)}</Badge>
@@ -391,7 +411,7 @@ export function App() {
           {activeFlow ? <FlowRunInfo flow={activeFlow} /> : null}
           <div className="subsection">
             <div className="panel-heading compact">
-              <h3>{t("run.recentRuns")}</h3>
+              <h3 className="mb-3 text-base font-semibold tracking-normal">{t("run.recentRuns")}</h3>
               <Button type="button" variant="secondary" onClick={() => clearRuns.mutate()} disabled={clearRuns.isPending}>{t("run.clear")}</Button>
             </div>
             <RunHistory runs={runs.data?.runs || []} selectedRunId={selectedRunId} onSelect={setSelectedRunId} />
@@ -399,12 +419,12 @@ export function App() {
         </section> : null}
 
         {activeSection === "define" ? <section id="define" className="panel">
-          <FlowDefine flows={flowList} selectedFlowId={selectedFlowId} onSelect={setSelectedFlowId} />
+          <FlowDefine flows={flowList} providers={activeConfig?.providers || []} selectedFlowId={selectedFlowId} onSelect={setSelectedFlowId} />
         </section> : null}
 
         {activeSection === "timeline" ? <section id="timeline" className="panel">
           <div className="panel-heading">
-            <h2>{t("timeline.title")}</h2>
+            <h2 className="mb-3 text-xl font-semibold tracking-normal">{t("timeline.title")}</h2>
             <div className="button-row">
               <Button type="button" onClick={() => retryRun.mutate({})} disabled={!selectedRunId || retryRun.isPending}>{t("timeline.retry")}</Button>
               <Button type="button" variant="secondary" onClick={() => cancelRun.mutate({})} disabled={!selectedRunId || cancelRun.isPending}>{t("timeline.cancel")}</Button>
@@ -415,7 +435,7 @@ export function App() {
         </section> : null}
 
         {activeSection === "context" ? <section id="context" className="panel">
-          <h2>{t("context.title")}</h2>
+          <h2 className="mb-3 text-xl font-semibold tracking-normal">{t("context.title")}</h2>
           <div className="grid">
             {(activeRun?.detail?.contextBlocks as Array<Record<string, unknown>> | undefined || fallbackContextBlocks()).map((item, index) => (
               <InfoCard key={index} title={String(item.type || item.source || `context-${index + 1}`)} meta={`${item.tokens || "-"} tokens`} body={String(item.source || item.detail || t("context.runtimeContext"))} />
@@ -424,24 +444,24 @@ export function App() {
         </section> : null}
 
         {activeSection === "observability" ? <section id="observability" className="panel">
-          <h2>{t("observability.title")}</h2>
+          <h2 className="mb-3 text-xl font-semibold tracking-normal">{t("observability.title")}</h2>
           <Observability report={observability.data?.observability} />
         </section> : null}
 
         {activeSection === "evidence" ? <section id="evidence" className="panel">
-          <h2>{t("evidence.title")}</h2>
+          <h2 className="mb-3 text-xl font-semibold tracking-normal">{t("evidence.title")}</h2>
           <Evidence runId={activeRun?.id} evidence={activeRun?.evidence || []} />
         </section> : null}
 
         {activeSection === "artifacts" ? <section id="artifacts" className="panel">
-          <h2>{t("artifacts.title")}</h2>
+          <h2 className="mb-3 text-xl font-semibold tracking-normal">{t("artifacts.title")}</h2>
           <Artifacts runId={activeRun?.id} artifacts={activeRun?.artifacts || []} />
         </section> : null}
 
         {activeSection === "api_keys" ? <section id="api_keys" className="panel">
           <div className="panel-heading">
             <div>
-              <h2>{t("manage.apiKeys")}</h2>
+              <h2 className="mb-3 text-xl font-semibold tracking-normal">{t("manage.apiKeys")}</h2>
               <p className="muted">{t("manage.apiKeysSubtitle")}</p>
             </div>
           </div>
@@ -449,7 +469,7 @@ export function App() {
         </section> : null}
 
         {activeSection === "manage" ? <section id="manage" className="panel">
-          <h2>{t("manage.title")}</h2>
+          <h2 className="mb-3 text-xl font-semibold tracking-normal">{t("manage.title")}</h2>
           <Management config={activeConfig} readiness={readiness.data} skills={skills.data} />
         </section> : null}
       </section>
@@ -463,12 +483,31 @@ function RunHistory({ runs, selectedRunId, onSelect }: { runs: RunView[]; select
   return (
     <div className="run-history">
       {runs.map((run) => (
-        <Button key={run.id} type="button" variant="secondary" className={run.id === selectedRunId ? "history-item active !grid !justify-stretch !whitespace-normal" : "history-item !grid !justify-stretch !whitespace-normal"} onClick={() => onSelect(run.id)}>
-          <strong>{run.topic}</strong>
-          <span>{t(`statuses.${run.status}`, run.status)} · {run.presetId} · {new Date(run.createdAt).toLocaleString()}</span>
-        </Button>
+        <SelectableCard
+          key={run.id}
+          active={run.id === selectedRunId}
+          title={run.topic}
+          meta={`${t(`statuses.${run.status}`, run.status)} · ${run.presetId} · ${new Date(run.createdAt).toLocaleString()}`}
+          onClick={() => onSelect(run.id)}
+        />
       ))}
     </div>
+  );
+}
+
+function SelectableCard({ active, title, meta, onClick }: { active?: boolean; title: string; meta: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "history-item grid min-h-[76px] w-full min-w-0 content-center gap-1.5 whitespace-normal rounded-md border border-input bg-card px-3.5 py-3 text-left text-foreground shadow-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        active && "border-primary bg-emerald-50 shadow-[inset_3px_0_0_var(--color-primary)]"
+      )}
+      onClick={onClick}
+    >
+      <strong className="block min-w-0 leading-snug text-foreground [overflow-wrap:anywhere]">{title}</strong>
+      <span className="block min-w-0 text-sm leading-snug text-muted-foreground [overflow-wrap:anywhere]">{meta}</span>
+    </button>
   );
 }
 
@@ -495,15 +534,26 @@ function FlowRunInfo({ flow }: { flow: FlowSummary }) {
   );
 }
 
-function FlowDefine({ flows, selectedFlowId, onSelect }: { flows: FlowSummary[]; selectedFlowId: string; onSelect: (flowId: string) => void }) {
+function FlowDefine({ flows, providers, selectedFlowId, onSelect }: { flows: FlowSummary[]; providers: ManagedProvider[]; selectedFlowId: string; onSelect: (flowId: string) => void }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const selected = flows.find((flow) => flow.id === selectedFlowId) || flows[0];
   const [draftText, setDraftText] = useState("");
   const [commandResult, setCommandResult] = useState("");
-  const [newStep, setNewStep] = useState({ id: "", type: "agent", skill: "", providerRole: "" });
+  const [flowFilter, setFlowFilter] = useState("");
+  const [newStep, setNewStep] = useState({ id: "", type: "agent", skill: "", skillCustom: "", providerRole: "", providerRoleCustom: "", providerId: "", providerCustom: "", model: "", modelCustom: "" });
   const [newArtifact, setNewArtifact] = useState({ id: "markdown_report", type: "markdown_report" });
+  const [artifactPreset, setArtifactPreset] = useState("markdown_report");
   const draftDefinition = useMemo(() => parseDraftDefinition(draftText), [draftText]);
+  const effectiveProviderRole = getEffectiveProviderRole(newStep.type, newStep.providerRole === "__custom__" ? newStep.providerRoleCustom : newStep.providerRole);
+  const providerOptions = providers.filter((provider) => !effectiveProviderRole || provider.type === effectiveProviderRole);
+  const selectedProvider = providers.find((provider) => provider.id === newStep.providerId);
+  const modelOptions = selectedProvider?.models || [];
+  const filteredFlows = flows.filter((flow) => {
+    const query = flowFilter.trim().toLowerCase();
+    if (!query) return true;
+    return `${flow.name} ${flow.status} ${flow.description || ""}`.toLowerCase().includes(query);
+  });
 
   useEffect(() => {
     if (selected) {
@@ -598,15 +648,21 @@ function FlowDefine({ flows, selectedFlowId, onSelect }: { flows: FlowSummary[];
   const addStep = () => {
     const id = sanitizeUiId(newStep.id);
     if (!id) return;
+    const skill = newStep.skill === "__custom__" ? newStep.skillCustom : newStep.skill;
+    const providerRole = newStep.providerRole === "__custom__" ? newStep.providerRoleCustom : newStep.providerRole;
+    const providerId = newStep.providerId === "__custom__" ? newStep.providerCustom : newStep.providerId;
+    const model = newStep.model === "__custom__" ? newStep.modelCustom : newStep.model;
     updateDraft((definition) => {
       const steps = Array.isArray(definition.steps) ? definition.steps : [];
       if (steps.some((step: any) => step.id === id)) return definition;
       const step: Record<string, string> = { id, type: newStep.type };
-      if (newStep.skill.trim()) step.skill = newStep.skill.trim();
-      if (newStep.providerRole.trim()) step.providerRole = newStep.providerRole.trim();
+      if (skill.trim()) step.skill = skill.trim();
+      if (providerRole.trim()) step.providerRole = providerRole.trim();
+      if (providerId.trim()) step.providerId = providerId.trim();
+      if (model.trim()) step.model = model.trim();
       return normalizeBuilderDefinition({ ...definition, steps: [...steps, step] });
     });
-    setNewStep({ id: "", type: "agent", skill: "", providerRole: "" });
+    setNewStep({ id: "", type: "agent", skill: "", skillCustom: "", providerRole: "", providerRoleCustom: "", providerId: "", providerCustom: "", model: "", modelCustom: "" });
   };
 
   const addStarterStep = (starter: typeof stepStarterCards[number]) => {
@@ -638,7 +694,8 @@ function FlowDefine({ flows, selectedFlowId, onSelect }: { flows: FlowSummary[];
     setNewArtifact({ id: "evidence_bundle", type: "json_evidence_bundle" });
   };
 
-  const addStarterArtifact = (starter: typeof artifactStarterCards[number]) => {
+  const addStarterArtifact = (starterId = artifactPreset) => {
+    const starter = artifactStarterCards.find((candidate) => candidate.id === starterId) || artifactStarterCards[0];
     updateDraft((definition) => {
       const artifacts = Array.isArray(definition.artifacts) ? definition.artifacts : [];
       const id = createUniqueBuilderId(starter.id, artifacts.map((artifact: any) => artifact.id));
@@ -646,11 +703,18 @@ function FlowDefine({ flows, selectedFlowId, onSelect }: { flows: FlowSummary[];
     });
   };
 
+  const removeArtifact = (artifactId: string) => {
+    updateDraft((definition) => normalizeBuilderDefinition({
+      ...definition,
+      artifacts: (Array.isArray(definition.artifacts) ? definition.artifacts : []).filter((artifact: any) => artifact.id !== artifactId)
+    }));
+  };
+
   return (
     <div className="define-surface">
       <div className="panel-heading">
         <div>
-          <h2>{t("define.title")}</h2>
+          <h2 className="mb-3 text-xl font-semibold tracking-normal">{t("define.title")}</h2>
           <p className="muted">{t("define.subtitle")}</p>
         </div>
         <div className="button-row">
@@ -674,18 +738,31 @@ function FlowDefine({ flows, selectedFlowId, onSelect }: { flows: FlowSummary[];
         ))}
       </div>
       <div className="flow-command-grid">
-        <aside className="flow-list">
-          {flows.map((flow) => (
-            <Button key={flow.id} type="button" variant="secondary" className={flow.id === selectedFlowId ? "history-item active !grid !justify-stretch !whitespace-normal" : "history-item !grid !justify-stretch !whitespace-normal"} onClick={() => onSelect(flow.id)}>
-              <strong>{flow.name}</strong>
-              <span>{flow.status} · v{flow.version || 0} · {flow.steps?.length || 0} steps</span>
-            </Button>
-          ))}
+        <aside className="flow-list-panel">
+          <div className="flow-list-toolbar">
+            <div>
+              <strong>{t("define.flowLibrary")}</strong>
+              <span>{t("define.flowLibraryHelp", { count: flows.length })}</span>
+            </div>
+            <Input value={flowFilter} placeholder={t("define.searchFlows")} onChange={(event) => setFlowFilter(event.target.value)} />
+          </div>
+          <div className="flow-list" role="list">
+            {filteredFlows.map((flow) => (
+              <SelectableCard
+                key={flow.id}
+                active={flow.id === selectedFlowId}
+                title={flow.name}
+                meta={`${flow.status} · v${flow.version || 0} · ${flow.steps?.length || 0} steps`}
+                onClick={() => onSelect(flow.id)}
+              />
+            ))}
+            {filteredFlows.length === 0 ? <div className="empty">{t("define.noMatchingFlows")}</div> : null}
+          </div>
         </aside>
         <div className="flow-editor">
           <div className="builder-header">
             <div>
-              <h3>{selected.name}</h3>
+              <h3 className="mb-3 text-base font-semibold tracking-normal">{selected.name}</h3>
               <p>{canEdit ? t("define.editingDraft") : t("define.builtInReadOnly")}</p>
             </div>
             <Badge variant="success">{selected.hasDraft ? t("define.draft") : `${t("define.version")} ${selected.version}`}</Badge>
@@ -713,15 +790,15 @@ function FlowDefine({ flows, selectedFlowId, onSelect }: { flows: FlowSummary[];
             </div>
             <div className="builder-section-heading">
               <div>
-                <h4>{t("define.stepsTitle")}</h4>
+                <h4 className="m-0 text-sm font-semibold">{t("define.stepsTitle")}</h4>
                 <p>{t("define.stepsHelp")}</p>
               </div>
             </div>
-            <FlowStepMap flow={{ ...selected, steps: (draftDefinition?.steps as FlowSummary["steps"]) || selected.steps }} onRemove={canEdit ? removeStep : undefined} />
+            <FlowStepMap flow={{ ...selected, steps: (draftDefinition?.steps as FlowSummary["steps"]) || selected.steps }} providers={providers} onRemove={canEdit ? removeStep : undefined} />
             {canEdit ? <div className="builder-action-panel">
               <div className="builder-section-heading compact">
                 <div>
-                  <h4>{t("define.quickAddStep")}</h4>
+                  <h4 className="m-0 text-sm font-semibold">{t("define.quickAddStep")}</h4>
                   <p>{t("define.quickAddStepHelp")}</p>
                 </div>
               </div>
@@ -756,11 +833,58 @@ function FlowDefine({ flows, selectedFlowId, onSelect }: { flows: FlowSummary[];
                   </Label>
                   <Label>
                     {t("define.stepSkillLabel")}
-                    <Input id="step-skill-input" placeholder={t("define.stepSkill")} value={newStep.skill} onChange={(event) => setNewStep({ ...newStep, skill: event.target.value })} />
+                    <Select id="step-skill-input" value={newStep.skill} onChange={(event) => setNewStep({ ...newStep, skill: event.target.value })}>
+                      {stepSkillOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.value ? `${t(`define.${option.labelKey}`)} · ${option.value === "__custom__" ? t("define.customOption") : option.value}` : t(`define.${option.labelKey}`)}</option>
+                      ))}
+                    </Select>
+                    {newStep.skill === "__custom__" ? (
+                      <Input id="step-skill-custom-input" placeholder={t("define.stepSkill")} value={newStep.skillCustom} onChange={(event) => setNewStep({ ...newStep, skillCustom: event.target.value })} />
+                    ) : null}
                   </Label>
                   <Label>
                     {t("define.providerRoleLabel")}
-                    <Input id="step-provider-role-input" placeholder={t("define.providerRole")} value={newStep.providerRole} onChange={(event) => setNewStep({ ...newStep, providerRole: event.target.value })} />
+                    <Select id="step-provider-role-input" value={newStep.providerRole} onChange={(event) => setNewStep({ ...newStep, providerRole: event.target.value, providerId: "", model: "" })}>
+                      {providerRoleOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.value ? `${t(`define.${option.labelKey}`)} · ${option.value === "__custom__" ? t("define.customOption") : option.value}` : t(`define.${option.labelKey}`)}</option>
+                      ))}
+                    </Select>
+                    {newStep.providerRole === "__custom__" ? (
+                      <Input id="step-provider-role-custom-input" placeholder={t("define.providerRole")} value={newStep.providerRoleCustom} onChange={(event) => setNewStep({ ...newStep, providerRoleCustom: event.target.value })} />
+                    ) : null}
+                  </Label>
+                  <Label>
+                    {t("define.providerLabel")}
+                    <Select
+                      id="step-provider-input"
+                      value={newStep.providerId}
+                      onChange={(event) => {
+                        const provider = providers.find((candidate) => candidate.id === event.target.value);
+                        setNewStep({ ...newStep, providerId: event.target.value, providerCustom: "", model: provider?.activeModel || "", modelCustom: "" });
+                      }}
+                    >
+                      <option value="">{t("define.providerAuto")}</option>
+                      {providerOptions.map((provider) => (
+                        <option key={provider.id} value={provider.id}>{provider.name} · {provider.type}</option>
+                      ))}
+                      <option value="__custom__">{t("define.customProvider")}</option>
+                    </Select>
+                    {newStep.providerId === "__custom__" ? (
+                      <Input id="step-provider-custom-input" placeholder={t("define.customProviderPlaceholder")} value={newStep.providerCustom} onChange={(event) => setNewStep({ ...newStep, providerCustom: event.target.value })} />
+                    ) : null}
+                  </Label>
+                  <Label>
+                    {t("define.modelLabel")}
+                    <Select id="step-model-input" value={newStep.model} onChange={(event) => setNewStep({ ...newStep, model: event.target.value, modelCustom: "" })}>
+                      <option value="">{t("define.modelAuto")}</option>
+                      {modelOptions.map((model) => (
+                        <option key={model} value={model}>{model}</option>
+                      ))}
+                      <option value="__custom__">{t("define.customModel")}</option>
+                    </Select>
+                    {newStep.model === "__custom__" ? (
+                      <Input id="step-model-custom-input" placeholder={t("define.customModelPlaceholder")} value={newStep.modelCustom} onChange={(event) => setNewStep({ ...newStep, modelCustom: event.target.value })} />
+                    ) : null}
                   </Label>
                   <Button type="button" variant="secondary" onClick={addStep}>{t("define.addStep")}</Button>
                 </div>
@@ -768,19 +892,26 @@ function FlowDefine({ flows, selectedFlowId, onSelect }: { flows: FlowSummary[];
             </div> : null}
             <div className="builder-section-heading">
               <div>
-                <h4>{t("define.outputsTitle")}</h4>
+                <h4 className="m-0 text-sm font-semibold">{t("define.outputsTitle")}</h4>
                 <p>{t("define.outputTemplateBody")}</p>
               </div>
             </div>
-            <ArtifactMap artifacts={(draftDefinition?.artifacts as FlowSummary["artifacts"]) || selected.artifacts} />
+            <ArtifactMap artifacts={(draftDefinition?.artifacts as FlowSummary["artifacts"]) || selected.artifacts} onRemove={canEdit ? removeArtifact : undefined} />
             {canEdit ? <div className="builder-action-panel">
-              <div className="artifact-palette">
-                {artifactStarterCards.map((starter) => (
-                  <button type="button" className="artifact-palette-card" key={starter.id} onClick={() => addStarterArtifact(starter)}>
-                    <strong>{t(`define.${starter.labelKey}`)}</strong>
-                    <small>{t(`define.${starter.detailKey}`)}</small>
-                  </button>
-                ))}
+              <div className="artifact-picker-row">
+                <Label>
+                  {t("define.outputPreset")}
+                  <Select value={artifactPreset} onChange={(event) => setArtifactPreset(event.target.value)}>
+                    {artifactStarterCards.map((starter) => (
+                      <option key={starter.id} value={starter.id}>{t(`define.${starter.labelKey}`)}</option>
+                    ))}
+                  </Select>
+                </Label>
+                <div className="artifact-preset-preview">
+                  <strong>{t(`define.${artifactStarterCards.find((starter) => starter.id === artifactPreset)?.labelKey || "markdownReport"}`)}</strong>
+                  <small>{t(`define.${artifactStarterCards.find((starter) => starter.id === artifactPreset)?.detailKey || "markdownReportDetail"}`)}</small>
+                </div>
+                <Button type="button" variant="secondary" onClick={() => addStarterArtifact()}>{t("define.addSelectedOutput")}</Button>
               </div>
               <div className="builder-add-row artifact-row">
                 <Label>
@@ -815,7 +946,7 @@ function FlowDefine({ flows, selectedFlowId, onSelect }: { flows: FlowSummary[];
   );
 }
 
-function FlowStepMap({ flow, onRemove }: { flow: FlowSummary; onRemove?: (stepId: string) => void }) {
+function FlowStepMap({ flow, providers, onRemove }: { flow: FlowSummary; providers: ManagedProvider[]; onRemove?: (stepId: string) => void }) {
   const { t } = useTranslation();
   if (flow.steps.length === 0) {
     return <div className="builder-empty">{t("define.noSteps")}</div>;
@@ -829,6 +960,7 @@ function FlowStepMap({ flow, onRemove }: { flow: FlowSummary; onRemove?: (stepId
             <strong>{t(`steps.${step.id}`, step.id)}</strong>
             <span>{step.type}</span>
             <small>{step.skill || step.providerRole || t("run.runtimeStep")}</small>
+            <small>{formatStepRouting(step, providers, t)}</small>
           </div>
           {onRemove ? <button type="button" className="mini-danger" onClick={() => onRemove(step.id)}>{t("define.remove")}</button> : null}
         </div>
@@ -837,16 +969,19 @@ function FlowStepMap({ flow, onRemove }: { flow: FlowSummary; onRemove?: (stepId
   );
 }
 
-function ArtifactMap({ artifacts }: { artifacts: FlowSummary["artifacts"] }) {
+function ArtifactMap({ artifacts, onRemove }: { artifacts: FlowSummary["artifacts"]; onRemove?: (artifactId: string) => void }) {
   const { t } = useTranslation();
   if (artifacts.length === 0) return <div className="builder-empty">{t("define.noArtifacts")}</div>;
   return (
     <div className="artifact-chip-list">
       {artifacts.map((artifact) => (
-        <span className="artifact-chip" key={artifact.id}>
-          <strong>{artifact.id}</strong>
-          <small>{artifact.type}</small>
-        </span>
+        <div className="artifact-chip" key={artifact.id}>
+          <div>
+            <strong>{artifact.id}</strong>
+            <small>{artifact.type}</small>
+          </div>
+          {onRemove ? <button type="button" className="mini-danger" onClick={() => onRemove(artifact.id)}>{t("define.remove")}</button> : null}
+        </div>
       ))}
     </div>
   );
@@ -1515,6 +1650,21 @@ function normalizeBuilderDefinition(definition: Record<string, any>) {
     edges: steps.slice(0, -1).map((step: any, index: number) => ({ from: step.id, to: steps[index + 1].id })),
     artifacts: Array.isArray(definition.artifacts) ? definition.artifacts.filter((artifact: any) => artifact?.id && artifact?.type) : []
   };
+}
+
+function getEffectiveProviderRole(stepType: string, providerRole: string) {
+  const role = providerRole.trim();
+  if (role) return role;
+  if (stepType === "agent" || stepType === "verifier") return "llm";
+  if (stepType === "artifact") return "artifact";
+  return "";
+}
+
+function formatStepRouting(step: FlowSummary["steps"][number], providers: ManagedProvider[], t: any) {
+  const provider = providers.find((candidate) => candidate.id === step.providerId);
+  if (provider) return `${t("define.routing")}: ${provider.name} / ${step.model || provider.activeModel || t("define.modelAuto")}`;
+  const role = getEffectiveProviderRole(step.type, step.providerRole || "");
+  return role ? `${t("define.routing")}: ${role} ${t("define.providerAuto")}` : `${t("define.routing")}: ${t("define.providerAuto")}`;
 }
 
 function sanitizeUiId(value: string) {

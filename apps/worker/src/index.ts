@@ -865,6 +865,7 @@ function normalizeManagedProvider(input, fallback) {
   return {
     id,
     name: typeof input?.name === "string" ? input.name.slice(0, 80) : fallback?.name || id,
+    type: typeof input?.type === "string" ? input.type.slice(0, 40) : fallback?.type || "llm",
     enabled: Boolean(input?.enabled ?? fallback?.enabled ?? false),
     credentialRef: typeof input?.credentialRef === "string" ? input.credentialRef.slice(0, 120) : fallback?.credentialRef || `${id.toUpperCase()}_API_KEY`,
     models: models.includes(activeModel) ? models : [activeModel, ...models],
