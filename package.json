@@ -12,6 +12,7 @@
     "check:web": "npm run build:ts && node .tmp/tsc/scripts/check-web.js",
     "check:web-ui": "npm run build:web && npm run build:ts && node .tmp/tsc/scripts/check-web-ui.js",
     "check:local-api": "npm run build:web && npm run build:ts && node .tmp/tsc/scripts/check-local-api.js",
+    "check:public-api": "npm run build:ts && node .tmp/tsc/scripts/check-public-api.js",
     "check:deploy-readiness": "npm run build:ts && node .tmp/tsc/scripts/check-deploy-readiness.js",
     "check:cloudflare": "npm run build:ts && node .tmp/tsc/scripts/check-cloudflare.js",
     "check:worker-bundle": "npm run build:web && npx wrangler deploy --dry-run",
@@ -22,7 +23,7 @@
     "cloudflare:setup:apply": "npm run build:ts && node .tmp/tsc/scripts/cloudflare-deploy.js --apply-setup",
     "cloudflare:deploy:remote": "npm run build:ts && node .tmp/tsc/scripts/cloudflare-deploy.js --deploy",
     "cloudflare:smoke:remote": "npm run build:ts && node .tmp/tsc/scripts/check-remote-worker.js",
-    "check": "npm run check:types && npm run build:web && npm run build:ts && node .tmp/tsc/scripts/check-runtime.js && node .tmp/tsc/scripts/check-web.js && node .tmp/tsc/scripts/check-web-ui.js && node .tmp/tsc/scripts/check-local-api.js && node .tmp/tsc/scripts/check-deploy-readiness.js && node .tmp/tsc/scripts/check-cloudflare.js && npx wrangler deploy --dry-run && node .tmp/tsc/scripts/check-worker-runtime.js"
+    "check": "npm run check:types && npm run build:web && npm run build:ts && node .tmp/tsc/scripts/check-runtime.js && node .tmp/tsc/scripts/check-web.js && node .tmp/tsc/scripts/check-web-ui.js && node .tmp/tsc/scripts/check-local-api.js && node .tmp/tsc/scripts/check-public-api.js && node .tmp/tsc/scripts/check-deploy-readiness.js && node .tmp/tsc/scripts/check-cloudflare.js && npx wrangler deploy --dry-run && node .tmp/tsc/scripts/check-worker-runtime.js"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260521.0",

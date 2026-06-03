@@ -17,6 +17,20 @@ import {
   createLocalReadinessReport,
   loadLocalDevVars
 } from "../packages/local/src/adapter.js";
+import { LocalApiGatewayStore } from "../packages/local/src/api-gateway-store.js";
+import {
+  attributeRunUsage,
+  authorizeRequest,
+  generateApiKey,
+  normalizeAllowedFlows,
+  normalizeBudget,
+  normalizeRateLimit,
+  normalizeScopes,
+  toPublicClient,
+  type ApiScope,
+  type GatewayDecision,
+  type RateLimitHeaders
+} from "../packages/runtime/src/api-gateway.js";
 
 type JsonRecord = Record<string, unknown>;
 type FlowDefinition = typeof deepResearchFlow;
@@ -41,6 +55,8 @@ type LocalRunView = {
   presetId: string;
   status: "queued" | "running" | "complete" | "failed" | "canceled";
   currentStepId: string;
+  clientId?: string;
+  usageAttributed?: boolean;
   topic: string;
   audience: string;
   freshnessDays: number;
@@ -187,6 +203,7 @@ const runtime = new InMemoryFlowRuntime({
 const runViews = new Map<string, LocalRunView>();
 const runTimers = new Map<string, Array<NodeJS.Timeout>>();
 const flowRecords = new Map<string, LocalFlowRecord>();
+const apiGatewayStore = new LocalApiGatewayStore(paths.apiGatewayStorePath);
 loadRunStore();
 loadFlowStore();
 let managementConfig = loadManagementConfig();
@@ -197,6 +214,39 @@ const server = createServer(async (request, response) => {
 
     if (url.pathname === "/api/health") {
       return sendJson(response, createLocalHealthReport(paths));
+    }
+
+    if (url.pathname === "/api/api-clients" && request.method === "GET") {
+      return sendJson(response, { clients: apiGatewayStore.listClients().map(serializeApiClient) });
+    }
+
+    if (url.pathname === "/api/api-clients" && request.method === "POST") {
+      const body = await readJson(request);
+      const result = await createApiClient(body);
+      return sendJson(response, result.body, result.status);
+    }
+
+    const apiClientRevokeMatch = url.pathname.match(/^\/api\/api-clients\/([^/]+)\/revoke$/);
+    if (apiClientRevokeMatch && request.method === "POST") {
+      const result = revokeApiClient(apiClientRevokeMatch[1]);
+      return sendJson(response, result.body, result.status);
+    }
+
+    const apiClientAuditMatch = url.pathname.match(/^\/api\/api-clients\/([^/]+)\/audit$/);
+    if (apiClientAuditMatch && request.method === "GET") {
+      const result = getApiClientAudit(apiClientAuditMatch[1]);
+      return sendJson(response, result.body, result.status);
+    }
+
+    const apiClientMatch = url.pathname.match(/^\/api\/api-clients\/([^/]+)$/);
+    if (apiClientMatch && request.method === "PATCH") {
+      const body = await readJson(request);
+      const result = updateApiClient(apiClientMatch[1], body);
+      return sendJson(response, result.body, result.status);
+    }
+
+    if (url.pathname.startsWith("/v1/")) {
+      return handlePublicApi(url, request, response);
     }
 
     if (url.pathname === "/api/flows" && request.method === "GET") {
@@ -1643,6 +1693,7 @@ function scheduleLocalProgress(runId: string) {
       artifactCount: view.artifacts.length,
       evidenceCount: view.evidence.length
     };
+    attributeLocalRunUsage(view);
     persistRunStore();
   }, 300 + stepIds.length * 350);
   timers.push(completeTimer);
@@ -2194,6 +2245,7 @@ function scheduleLocalProgressFrom(runId: string, startIndex: number) {
       artifactCount: view.artifacts.length,
       evidenceCount: view.evidence.length
     };
+    attributeLocalRunUsage(view);
     persistRunStore();
   }, 300 + (stepIds.length - startIndex) * 350);
   timers.push(completeTimer);
@@ -2258,9 +2310,254 @@ async function readJson(request: IncomingMessage): Promise<JsonRecord> {
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as JsonRecord;
 }
 
-function sendJson(response: ServerResponse, payload: unknown, status = 200) {
-  response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+function sendJson(response: ServerResponse, payload: unknown, status = 200, headers: Record<string, string> = {}) {
+  response.writeHead(status, { "content-type": "application/json; charset=utf-8", ...headers });
   response.end(JSON.stringify(payload, null, 2));
+}
+
+// --- API gateway: admin CRUD + public /v1 middleware ---
+
+function serializeApiClient(client: ReturnType<LocalApiGatewayStore["listClients"]>[number]) {
+  const windowKey = new Date().toISOString().slice(0, 7);
+  return {
+    ...toPublicClient(client),
+    usage: apiGatewayStore.getUsageSnapshot(client.id, windowKey)
+  };
+}
+
+async function createApiClient(body: JsonRecord) {
+  const name = typeof body.name === "string" && body.name.trim() ? body.name.trim().slice(0, 120) : "";
+  if (!name) return { status: 422, body: { error: "name is required", code: "invalid_request" } };
+  const { plaintext, keyPrefix, keyHash } = await generateApiKey();
+  const now = new Date().toISOString();
+  const client = apiGatewayStore.insertClient({
+    id: apiGatewayStore.newClientId(),
+    name,
+    keyPrefix,
+    keyHash,
+    status: "active",
+    scopes: normalizeScopes(body.scopes),
+    allowedFlows: normalizeAllowedFlows(body.allowedFlows),
+    rateLimit: normalizeRateLimit(body.rateLimit),
+    budget: normalizeBudget(body.budget),
+    createdAt: now
+  });
+  return { status: 201, body: { client: serializeApiClient(client), key: plaintext } };
+}
+
+function updateApiClient(id: string, body: JsonRecord) {
+  const existing = apiGatewayStore.getClientById(id);
+  if (!existing) return { status: 404, body: { error: "API client not found", code: "not_found" } };
+  const patch: Record<string, unknown> = {};
+  if (typeof body.name === "string" && body.name.trim()) patch.name = body.name.trim().slice(0, 120);
+  if (body.scopes !== undefined) patch.scopes = normalizeScopes(body.scopes);
+  if (body.allowedFlows !== undefined) patch.allowedFlows = normalizeAllowedFlows(body.allowedFlows);
+  if (body.rateLimit !== undefined) patch.rateLimit = normalizeRateLimit(body.rateLimit);
+  if (body.budget !== undefined) patch.budget = normalizeBudget(body.budget);
+  const updated = apiGatewayStore.updateClient(id, patch);
+  return { status: 200, body: { client: serializeApiClient(updated!) } };
+}
+
+function revokeApiClient(id: string) {
+  const existing = apiGatewayStore.getClientById(id);
+  if (!existing) return { status: 404, body: { error: "API client not found", code: "not_found" } };
+  const updated = apiGatewayStore.updateClient(id, { status: "revoked" });
+  return { status: 200, body: { client: serializeApiClient(updated!) } };
+}
+
+function getApiClientAudit(id: string) {
+  const existing = apiGatewayStore.getClientById(id);
+  if (!existing) return { status: 404, body: { error: "API client not found", code: "not_found" } };
+  const windowKey = new Date().toISOString().slice(0, 7);
+  return {
+    status: 200,
+    body: {
+      audit: apiGatewayStore.listAudit(id, 100),
+      usage: apiGatewayStore.getUsageSnapshot(id, windowKey)
+    }
+  };
+}
+
+function attributeLocalRunUsage(view: LocalRunView) {
+  if (!view.clientId || view.usageAttributed) return;
+  view.usageAttributed = true;
+  const metrics = createObservabilityReport(view).metrics;
+  void attributeRunUsage(apiGatewayStore, view.clientId, {
+    costUsd: metrics.totalCostUsd,
+    tokens: metrics.totalTokens,
+    runs: 0
+  });
+}
+
+const PUBLIC_ROUTES: Array<{ method: string; pattern: RegExp; scope: ApiScope; isRun?: boolean }> = [
+  { method: "POST", pattern: /^\/v1\/runs$/, scope: "runs:write", isRun: true },
+  { method: "GET", pattern: /^\/v1\/flows$/, scope: "flows:read" },
+  { method: "GET", pattern: /^\/v1\/runs\/([^/]+)\/artifacts\/([^/]+)$/, scope: "artifacts:read" },
+  { method: "GET", pattern: /^\/v1\/runs\/([^/]+)\/artifacts$/, scope: "artifacts:read" },
+  { method: "GET", pattern: /^\/v1\/runs\/([^/]+)\/evidence$/, scope: "evidence:read" },
+  { method: "GET", pattern: /^\/v1\/runs\/([^/]+)$/, scope: "runs:read" }
+];
+
+async function handlePublicApi(url: URL, request: IncomingMessage, response: ServerResponse) {
+  const method = request.method || "GET";
+  const route = PUBLIC_ROUTES.find((candidate) => candidate.method === method && candidate.pattern.test(url.pathname));
+  if (!route) {
+    return sendJson(response, { error: "Not found", code: "not_found" }, 404);
+  }
+
+  let body: JsonRecord = {};
+  if (method === "POST") {
+    try {
+      body = await readJson(request);
+    } catch {
+      return sendJson(response, { error: "Request body must be valid JSON", code: "invalid_request" }, 400);
+    }
+  }
+
+  const flowId = route.isRun ? (typeof body.flowId === "string" ? body.flowId : undefined) : undefined;
+  const decision = await authorizeRequest(apiGatewayStore, {
+    method,
+    path: url.pathname,
+    authorization: request.headers["authorization"] as string | undefined,
+    requiredScope: route.scope,
+    flowId,
+    countsAsRun: route.isRun
+  });
+
+  if (!decision.allowed) {
+    await writePublicAudit(decision, method, url.pathname, undefined, 0, 0);
+    return sendJson(response, { error: decision.error, code: decision.code }, decision.statusCode, rateLimitHeaderObject(decision.headers));
+  }
+
+  const headers = rateLimitHeaderObject(decision.headers);
+  apiGatewayStore.touchClient(decision.client.id, new Date().toISOString());
+
+  // Dispatch to existing handlers.
+  if (route.method === "POST" && /^\/v1\/runs$/.test(url.pathname)) {
+    const result = createFlowRun(flowId || managementConfig.flow.id, body);
+    if (!result.run) {
+      await writePublicAudit(decision, method, url.pathname, undefined, 0, 0, result.status);
+      return sendJson(response, { error: result.error, code: "invalid_request", details: (result as any).details }, result.status === 404 ? 404 : 422, headers);
+    }
+    const view = runViews.get(result.run.id);
+    if (view) view.clientId = decision.client.id;
+    persistRunStore();
+    await writePublicAudit(decision, method, url.pathname, result.run.id, 0, 0, 200);
+    return sendJson(response, { runId: result.run.id, status: result.run.status }, 200, headers);
+  }
+
+  if (/^\/v1\/flows$/.test(url.pathname)) {
+    const flows = listLocalFlows()
+      .filter((flow) => flow.status !== "archived")
+      .filter((flow) => decision.client.allowedFlows.length === 0 || decision.client.allowedFlows.includes(flow.id))
+      .map((flow) => ({ id: flow.id, name: flow.name, description: flow.description, presets: flow.presets }));
+    await writePublicAudit(decision, method, url.pathname, undefined, 0, 0, 200);
+    return sendJson(response, { flows }, 200, headers);
+  }
+
+  const artifactDownload = url.pathname.match(/^\/v1\/runs\/([^/]+)\/artifacts\/([^/]+)$/);
+  if (artifactDownload) {
+    const owned = requireOwnedRun(decision, artifactDownload[1]);
+    if (!owned.ok) {
+      await writePublicAudit(decision, method, url.pathname, artifactDownload[1], 0, 0, owned.status);
+      return sendJson(response, owned.body, owned.status, headers);
+    }
+    const artifact = owned.run.artifacts.find((candidate) => candidate.id === artifactDownload[2]);
+    if (!artifact) {
+      await writePublicAudit(decision, method, url.pathname, artifactDownload[1], 0, 0, 404);
+      return sendJson(response, { error: "Artifact not found", code: "not_found" }, 404, headers);
+    }
+    await writePublicAudit(decision, method, url.pathname, artifactDownload[1], 0, 0, 200);
+    return sendJson(response, { id: artifact.id, name: artifact.name, type: artifact.type, version: artifact.version, content: artifact.content }, 200, headers);
+  }
+
+  const artifactList = url.pathname.match(/^\/v1\/runs\/([^/]+)\/artifacts$/);
+  if (artifactList) {
+    const owned = requireOwnedRun(decision, artifactList[1]);
+    if (!owned.ok) {
+      await writePublicAudit(decision, method, url.pathname, artifactList[1], 0, 0, owned.status);
+      return sendJson(response, owned.body, owned.status, headers);
+    }
+    await writePublicAudit(decision, method, url.pathname, artifactList[1], 0, 0, 200);
+    return sendJson(response, { artifacts: owned.run.artifacts.map((artifact) => ({ id: artifact.id, name: artifact.name, type: artifact.type, version: artifact.version })) }, 200, headers);
+  }
+
+  const evidenceList = url.pathname.match(/^\/v1\/runs\/([^/]+)\/evidence$/);
+  if (evidenceList) {
+    const owned = requireOwnedRun(decision, evidenceList[1]);
+    if (!owned.ok) {
+      await writePublicAudit(decision, method, url.pathname, evidenceList[1], 0, 0, owned.status);
+      return sendJson(response, owned.body, owned.status, headers);
+    }
+    await writePublicAudit(decision, method, url.pathname, evidenceList[1], 0, 0, 200);
+    return sendJson(response, { evidence: owned.run.evidence }, 200, headers);
+  }
+
+  const runDetail = url.pathname.match(/^\/v1\/runs\/([^/]+)$/);
+  if (runDetail) {
+    const owned = requireOwnedRun(decision, runDetail[1]);
+    if (!owned.ok) {
+      await writePublicAudit(decision, method, url.pathname, runDetail[1], 0, 0, owned.status);
+      return sendJson(response, owned.body, owned.status, headers);
+    }
+    await writePublicAudit(decision, method, url.pathname, runDetail[1], 0, 0, 200);
+    return sendJson(response, {
+      runId: owned.run.id,
+      status: owned.run.status,
+      currentStepId: owned.run.currentStepId,
+      timeline: owned.run.timeline
+    }, 200, headers);
+  }
+
+  return sendJson(response, { error: "Not found", code: "not_found" }, 404, headers);
+}
+
+function requireOwnedRun(decision: GatewayDecision, runId: string): {
+  ok: boolean;
+  run?: LocalRunView;
+  status: number;
+  body?: { error: string; code: string };
+} {
+  const run = runViews.get(runId);
+  // Treat runs owned by a different client as not found so ownership is not leaked.
+  if (!run || run.clientId !== decision.client?.id) {
+    return { ok: false, status: 404, body: { error: "Run not found", code: "not_found" } };
+  }
+  return { ok: true, run, status: 200 };
+}
+
+function rateLimitHeaderObject(headers: RateLimitHeaders): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+}
+
+async function writePublicAudit(
+  decision: GatewayDecision,
+  method: string,
+  path: string,
+  runId: string | undefined,
+  costUsd: number,
+  tokens: number,
+  statusCode?: number
+) {
+  const clientId = decision.allowed ? decision.client.id : decision.client?.id;
+  const defaultCode = decision.allowed ? 200 : decision.statusCode;
+  const outcome = decision.allowed ? "allow" : `deny:${decision.reason}`;
+  await apiGatewayStore.recordAudit({
+    id: apiGatewayStore.newAuditId(),
+    clientId,
+    ts: new Date().toISOString(),
+    method,
+    path,
+    runId,
+    statusCode: statusCode ?? defaultCode,
+    outcome,
+    costUsd,
+    tokens
+  });
 }
 
 function sendArtifact(response: ServerResponse, runId: string, artifactId: string) {

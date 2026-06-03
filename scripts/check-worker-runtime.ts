@@ -47,6 +47,7 @@ try {
   const runId = await assertRunLifecycle(customFlowId);
   await assertArtifact(runId);
   await assertEvidenceReviewAndRegeneration(runId);
+  await assertPublicApi();
   await assertRetryCancelDelete(runId);
   console.log("worker runtime check passed");
 } finally {
@@ -397,6 +398,84 @@ async function assertEvidenceReviewAndRegeneration(runId) {
   if (improvement.status !== 201 || improvement.body.proposal?.evalCase?.sourceRunId !== runId) {
     throw new Error("Expected Worker improvement proposal command to create a draft eval case from run feedback");
   }
+}
+
+async function assertPublicApi() {
+  // Issue an external API client through the admin API.
+  const created = await postJson("/api/api-clients", {
+    name: "Worker Public Smoke",
+    scopes: ["runs:write", "runs:read", "artifacts:read", "evidence:read", "flows:read"],
+    allowedFlows: [],
+    rateLimit: { requestsPerMin: 100, runsPerDay: 100 },
+    budget: { maxCostUsd: 100, maxTokens: 1000000 }
+  });
+  if (created.status !== 201 || !created.body.key || !created.body.key.startsWith("ak_live_")) {
+    throw new Error(`Expected Worker API client creation to return ak_live_ key: ${JSON.stringify(created.body)}`);
+  }
+  const key = created.body.key;
+
+  // Missing key -> 401.
+  const noKey = await fetch(`${baseUrl}/v1/runs`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ flowId: "deep_research", presetId: "standard", inputs: { topic: "worker public smoke", freshness_days: 30 } })
+  });
+  if (noKey.status !== 401) {
+    throw new Error(`Expected Worker /v1 to reject missing key with 401: ${noKey.status}`);
+  }
+
+  // Create a run with the key.
+  const createdRun = await v1("POST", "/v1/runs", key, { flowId: "deep_research", presetId: "standard", inputs: { topic: "worker public smoke", freshness_days: 30 } });
+  if (createdRun.status !== 200 || !createdRun.body.runId) {
+    throw new Error(`Expected Worker /v1/runs creation: ${JSON.stringify(createdRun)}`);
+  }
+  const runId = createdRun.body.runId;
+
+  // Poll until complete, then fetch an artifact.
+  const startedAt = Date.now();
+  let status = "";
+  while (Date.now() - startedAt < 15000) {
+    const poll = await v1("GET", `/v1/runs/${runId}`, key);
+    status = poll.body?.status;
+    if (status === "complete") break;
+    await sleep(300);
+  }
+  if (status !== "complete") {
+    throw new Error(`Timed out waiting for Worker /v1 run ${runId} to complete`);
+  }
+
+  const artifacts = await v1("GET", `/v1/runs/${runId}/artifacts`, key);
+  if (artifacts.status !== 200 || !Array.isArray(artifacts.body.artifacts) || artifacts.body.artifacts.length < 1) {
+    throw new Error(`Expected Worker /v1 artifact list: ${JSON.stringify(artifacts)}`);
+  }
+  const artifact = await v1("GET", `/v1/runs/${runId}/artifacts/${artifacts.body.artifacts[0].id}`, key);
+  if (artifact.status !== 200 || artifact.body.content === undefined) {
+    throw new Error(`Expected Worker /v1 artifact download: ${JSON.stringify(artifact)}`);
+  }
+
+  // Revoke and confirm 401.
+  const clientId = created.body.client.id;
+  const revoked = await postJson(`/api/api-clients/${clientId}/revoke`, {});
+  if (revoked.status !== 200 || revoked.body.client?.status !== "revoked") {
+    throw new Error(`Expected Worker API client revoke: ${JSON.stringify(revoked.body)}`);
+  }
+  const afterRevoke = await v1("GET", `/v1/runs/${runId}`, key);
+  if (afterRevoke.status !== 401) {
+    throw new Error(`Expected revoked Worker key to be 401: ${JSON.stringify(afterRevoke)}`);
+  }
+}
+
+async function v1(method, path, key, body) {
+  const headers = { authorization: `Bearer ${key}` };
+  if (body !== undefined) headers["content-type"] = "application/json";
+  const response = await fetch(`${baseUrl}${path}`, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined
+  });
+  const contentType = response.headers.get("content-type") || "";
+  const parsed = contentType.includes("application/json") ? await response.json() : { text: await response.text() };
+  return { status: response.status, body: parsed };
 }
 
 async function assertRetryCancelDelete(runId) {

@@ -461,11 +461,11 @@ export function App() {
         {activeSection === "api_keys" ? <section id="api_keys" className="panel">
           <div className="panel-heading">
             <div>
-              <h2 className="mb-3 text-xl font-semibold tracking-normal">{t("manage.apiKeys")}</h2>
-              <p className="muted">{t("manage.apiKeysSubtitle")}</p>
+              <h2 className="mb-3 text-xl font-semibold tracking-normal">{t("apiClients.title")}</h2>
+              <p className="muted">{t("apiClients.subtitle")}</p>
             </div>
           </div>
-          {activeConfig ? <ApiKeySetupPanel providers={activeConfig.providers} /> : <div className="empty">{t("manage.loading")}</div>}
+          <ApiClients flows={flowList} />
         </section> : null}
 
         {activeSection === "manage" ? <section id="manage" className="panel">
@@ -1227,6 +1227,237 @@ function Management({ config, readiness, skills }: { config?: ManagementConfig; 
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+const API_CLIENT_SCOPES = ["runs:write", "runs:read", "artifacts:read", "evidence:read", "flows:read"] as const;
+
+type ApiClient = {
+  id: string;
+  name: string;
+  keyPrefix: string;
+  status: string;
+  scopes: string[];
+  allowedFlows: string[];
+  rateLimit: { requestsPerMin?: number; runsPerDay?: number };
+  budget: { maxCostUsd?: number; maxTokens?: number; window?: string };
+  createdAt: string;
+  lastUsedAt?: string;
+  usage?: { costUsd: number; tokens: number; runs: number };
+};
+
+function ApiClients({ flows }: { flows: FlowSummary[] }) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const clientsQuery = useApiQuery(["api-clients"], "/api/api-clients");
+  const clients: ApiClient[] = clientsQuery.data?.clients || [];
+
+  const [name, setName] = useState("");
+  const [scopes, setScopes] = useState<string[]>(["runs:write", "runs:read", "artifacts:read", "evidence:read", "flows:read"]);
+  const [allowedFlows, setAllowedFlows] = useState("");
+  const [requestsPerMin, setRequestsPerMin] = useState("60");
+  const [runsPerDay, setRunsPerDay] = useState("100");
+  const [maxCostUsd, setMaxCostUsd] = useState("");
+  const [maxTokens, setMaxTokens] = useState("");
+  const [error, setError] = useState("");
+  const [plaintextKey, setPlaintextKey] = useState("");
+
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ["api-clients"] });
+
+  const createClient = useMutation({
+    mutationFn: () => apiPost("/api/api-clients", {
+      name: name.trim(),
+      scopes,
+      allowedFlows: allowedFlows.split(",").map((item) => item.trim()).filter(Boolean),
+      rateLimit: {
+        requestsPerMin: Number(requestsPerMin) || undefined,
+        runsPerDay: Number(runsPerDay) || undefined
+      },
+      budget: {
+        maxCostUsd: maxCostUsd ? Number(maxCostUsd) : undefined,
+        maxTokens: maxTokens ? Number(maxTokens) : undefined
+      }
+    }),
+    onSuccess: async (payload) => {
+      setError("");
+      setPlaintextKey(payload?.key || "");
+      setName("");
+      await refresh();
+    },
+    onError: (mutationError) => setError(mutationError instanceof Error ? mutationError.message : t("apiClients.createFailed"))
+  });
+
+  const toggleScope = (scope: string) => {
+    setScopes((current) => current.includes(scope) ? current.filter((item) => item !== scope) : [...current, scope]);
+  };
+
+  const handleCreate = () => {
+    if (!name.trim()) {
+      setError(t("apiClients.nameRequired"));
+      return;
+    }
+    createClient.mutate();
+  };
+
+  return (
+    <div className="grid">
+      {plaintextKey ? <ApiKeyReveal apiKey={plaintextKey} onClose={() => setPlaintextKey("")} /> : null}
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("apiClients.create")}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid tight">
+            <div>
+              <Label htmlFor="api-client-name">{t("apiClients.name")}</Label>
+              <Input id="api-client-name" value={name} placeholder={t("apiClients.namePlaceholder")} onChange={(event) => setName(event.target.value)} />
+            </div>
+            <div>
+              <Label>{t("apiClients.scopes")}</Label>
+              <div className="flex flex-wrap gap-2">
+                {API_CLIENT_SCOPES.map((scope) => (
+                  <button
+                    key={scope}
+                    type="button"
+                    className={cn(
+                      "rounded-md border border-input px-2.5 py-1 text-sm",
+                      scopes.includes(scope) ? "border-primary bg-emerald-50 text-foreground" : "text-muted-foreground"
+                    )}
+                    aria-pressed={scopes.includes(scope)}
+                    onClick={() => toggleScope(scope)}
+                  >
+                    {scope}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="api-client-flows">{t("apiClients.allowedFlows")}</Label>
+              <Input
+                id="api-client-flows"
+                value={allowedFlows}
+                placeholder={flows.length ? flows.map((flow) => flow.id).slice(0, 2).join(", ") : t("apiClients.allowedFlowsPlaceholder")}
+                onChange={(event) => setAllowedFlows(event.target.value)}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label htmlFor="api-client-rpm">{t("apiClients.requestsPerMin")}</Label>
+                <Input id="api-client-rpm" type="number" value={requestsPerMin} onChange={(event) => setRequestsPerMin(event.target.value)} />
+              </div>
+              <div>
+                <Label htmlFor="api-client-rpd">{t("apiClients.runsPerDay")}</Label>
+                <Input id="api-client-rpd" type="number" value={runsPerDay} onChange={(event) => setRunsPerDay(event.target.value)} />
+              </div>
+              <div>
+                <Label htmlFor="api-client-cost">{t("apiClients.maxCostUsd")}</Label>
+                <Input id="api-client-cost" type="number" value={maxCostUsd} onChange={(event) => setMaxCostUsd(event.target.value)} />
+              </div>
+              <div>
+                <Label htmlFor="api-client-tokens">{t("apiClients.maxTokens")}</Label>
+                <Input id="api-client-tokens" type="number" value={maxTokens} onChange={(event) => setMaxTokens(event.target.value)} />
+              </div>
+            </div>
+            <Button type="button" onClick={handleCreate} disabled={createClient.isPending}>
+              {createClient.isPending ? t("apiClients.creating") : t("apiClients.create")}
+            </Button>
+            {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          </div>
+        </CardContent>
+      </Card>
+
+      {clientsQuery.isLoading ? <div className="empty">{t("apiClients.loading")}</div> : null}
+      {!clientsQuery.isLoading && clients.length === 0 ? <div className="empty">{t("apiClients.empty")}</div> : null}
+      {clients.map((client) => <ApiClientCard key={client.id} client={client} onChanged={refresh} />)}
+    </div>
+  );
+}
+
+function ApiKeyReveal({ apiKey, onClose }: { apiKey: string; onClose: () => void }) {
+  const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(apiKey);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t("apiClients.keyOnceTitle")}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <p className="mb-2 text-sm text-destructive">{t("apiClients.keyOnceWarning")}</p>
+        <code className="block break-all rounded-md bg-muted px-3 py-2 text-sm">{apiKey}</code>
+        <div className="mt-3 flex gap-2">
+          <Button type="button" variant="secondary" onClick={copy}>{copied ? t("apiClients.copied") : t("apiClients.copy")}</Button>
+          <Button type="button" onClick={onClose}>{t("apiClients.close")}</Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ApiClientCard({ client, onChanged }: { client: ApiClient; onChanged: () => void }) {
+  const { t } = useTranslation();
+  const [showAudit, setShowAudit] = useState(false);
+  const audit = useApiQuery(["api-client-audit", client.id], showAudit ? `/api/api-clients/${client.id}/audit` : undefined);
+
+  const revoke = useMutation({
+    mutationFn: () => apiPost(`/api/api-clients/${client.id}/revoke`, {}),
+    onSuccess: () => onChanged()
+  });
+
+  const handleRevoke = () => {
+    if (window.confirm(t("apiClients.revokeConfirm"))) revoke.mutate();
+  };
+
+  const usage = client.usage || { costUsd: 0, tokens: 0, runs: 0 };
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="card-heading">
+          <CardTitle>{client.name}</CardTitle>
+          <Badge>{client.status === "active" ? t("apiClients.active") : t("apiClients.revoked")}</Badge>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="grid tight text-sm">
+          <p><strong>{t("apiClients.prefix")}:</strong> <code>{client.keyPrefix}</code></p>
+          <p><strong>{t("apiClients.scopes")}:</strong> {client.scopes.join(", ") || "—"}</p>
+          <p><strong>{t("apiClients.allowedFlows")}:</strong> {client.allowedFlows.length ? client.allowedFlows.join(", ") : "*"}</p>
+          <p><strong>{t("apiClients.rateLimit")}:</strong> {client.rateLimit?.requestsPerMin || "—"}/min · {client.rateLimit?.runsPerDay || "—"}/day</p>
+          <p><strong>{t("apiClients.budget")}:</strong> {client.budget?.maxCostUsd ? `$${client.budget.maxCostUsd}` : "—"} · {client.budget?.maxTokens || "—"} tokens</p>
+          <p><strong>{t("apiClients.usage")}:</strong> {t("apiClients.usageValue", { cost: usage.costUsd.toFixed(3), tokens: usage.tokens })}</p>
+          <p><strong>{t("apiClients.lastUsedAt")}:</strong> {client.lastUsedAt ? new Date(client.lastUsedAt).toLocaleString() : t("apiClients.never")}</p>
+        </div>
+        <div className="mt-3 flex gap-2">
+          {client.status === "active" ? (
+            <Button type="button" variant="secondary" onClick={handleRevoke} disabled={revoke.isPending}>{t("apiClients.revoke")}</Button>
+          ) : null}
+          <Button type="button" variant="ghost" onClick={() => setShowAudit((current) => !current)}>
+            {showAudit ? t("apiClients.hideAudit") : t("apiClients.viewAudit")}
+          </Button>
+        </div>
+        {showAudit ? (
+          <div className="mt-3 grid tight text-sm">
+            {(audit.data?.audit || []).length === 0 ? <div className="empty">{t("apiClients.auditEmpty")}</div> : null}
+            {(audit.data?.audit || []).map((entry: any) => (
+              <InfoCard
+                key={entry.id}
+                title={`${entry.method} ${entry.path}`}
+                meta={`${entry.outcome} · ${entry.statusCode}`}
+                body={new Date(entry.ts).toLocaleString()}
+              />
+            ))}
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
 

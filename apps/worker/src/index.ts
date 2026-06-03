@@ -17,6 +17,18 @@ import {
   getProviderCatalogEntry
 } from "../../../packages/runtime/src/provider-catalog.js";
 import { DeepResearchWorkflow } from "./workflow.js";
+import { WorkerApiGatewayStore } from "../../../packages/cloudflare/src/api-gateway-store.js";
+import {
+  attributeRunUsage,
+  authorizeRequest,
+  generateApiKey,
+  monthlyWindowKey,
+  normalizeAllowedFlows,
+  normalizeBudget,
+  normalizeRateLimit,
+  normalizeScopes,
+  toPublicClient
+} from "../../../packages/runtime/src/api-gateway.js";
 
 export { DeepResearchWorkflow, RunCoordinator };
 
@@ -343,7 +355,191 @@ app.delete("/api/runs/:runId", async (c) => {
   return c.json({ deleted: runId });
 });
 
-app.notFound((c) => c.env.ASSETS.fetch(c.req.raw));
+// --- Admin API: external API clients ---
+
+app.get("/api/api-clients", async (c) => {
+  requireCloudflareBindings(c.env);
+  const store = new WorkerApiGatewayStore(c.env);
+  const clients = await store.listClients();
+  const windowKey = monthlyWindowKey(new Date());
+  const withUsage = await Promise.all(clients.map(async (client) => ({
+    ...toPublicClient(client),
+    usage: await store.getUsage(client.id, windowKey)
+  })));
+  return c.json({ clients: withUsage });
+});
+
+app.post("/api/api-clients", async (c) => {
+  requireCloudflareBindings(c.env);
+  const store = new WorkerApiGatewayStore(c.env);
+  const body = await c.req.json().catch(() => ({}));
+  const name = typeof body.name === "string" && body.name.trim() ? body.name.trim().slice(0, 120) : "";
+  if (!name) return c.json({ error: "name is required", code: "invalid_request" }, 422);
+  const { plaintext, keyPrefix, keyHash } = await generateApiKey();
+  const client = await store.insertClient({
+    id: store.newClientId(),
+    name,
+    keyPrefix,
+    keyHash,
+    status: "active",
+    scopes: normalizeScopes(body.scopes),
+    allowedFlows: normalizeAllowedFlows(body.allowedFlows),
+    rateLimit: normalizeRateLimit(body.rateLimit),
+    budget: normalizeBudget(body.budget)
+  });
+  return c.json({ client: toPublicClient(client), key: plaintext }, 201);
+});
+
+app.patch("/api/api-clients/:clientId", async (c) => {
+  requireCloudflareBindings(c.env);
+  const store = new WorkerApiGatewayStore(c.env);
+  const body = await c.req.json().catch(() => ({}));
+  const patch = {};
+  if (typeof body.name === "string" && body.name.trim()) patch.name = body.name.trim().slice(0, 120);
+  if (body.scopes !== undefined) patch.scopes = normalizeScopes(body.scopes);
+  if (body.allowedFlows !== undefined) patch.allowedFlows = normalizeAllowedFlows(body.allowedFlows);
+  if (body.rateLimit !== undefined) patch.rateLimit = normalizeRateLimit(body.rateLimit);
+  if (body.budget !== undefined) patch.budget = normalizeBudget(body.budget);
+  const updated = await store.updateClient(c.req.param("clientId"), patch);
+  if (!updated) return c.json({ error: "API client not found", code: "not_found" }, 404);
+  return c.json({ client: toPublicClient(updated) });
+});
+
+app.post("/api/api-clients/:clientId/revoke", async (c) => {
+  requireCloudflareBindings(c.env);
+  const store = new WorkerApiGatewayStore(c.env);
+  const updated = await store.updateClient(c.req.param("clientId"), { status: "revoked" });
+  if (!updated) return c.json({ error: "API client not found", code: "not_found" }, 404);
+  return c.json({ client: toPublicClient(updated) });
+});
+
+app.get("/api/api-clients/:clientId/audit", async (c) => {
+  requireCloudflareBindings(c.env);
+  const store = new WorkerApiGatewayStore(c.env);
+  const id = c.req.param("clientId");
+  const client = await store.getClientById(id);
+  if (!client) return c.json({ error: "API client not found", code: "not_found" }, 404);
+  const windowKey = monthlyWindowKey(new Date());
+  return c.json({ audit: await store.listAudit(id, 100), usage: await store.getUsage(id, windowKey) });
+});
+
+// --- Public API: /v1 ---
+
+app.post("/v1/runs", async (c) => {
+  return handlePublicV1(c, "runs:write", async (store, decision) => {
+    const body = await c.req.json().catch(() => ({}));
+    const flowId = typeof body.flowId === "string" ? body.flowId : "deep_research";
+    const presetId = typeof body.presetId === "string" ? body.presetId : "standard";
+    let result;
+    try {
+      result = await createCloudflareRun({ env: c.env, flowId, body: { presetId, inputs: body.inputs || {}, version: body.version } });
+    } catch (error) {
+      let detail = {};
+      try {
+        const res = error instanceof Response ? error : (typeof error?.getResponse === "function" ? error.getResponse() : null);
+        if (res) detail = await res.clone().json().catch(() => ({}));
+      } catch {
+        detail = {};
+      }
+      result = { status: 422, error: detail.error || (error?.message || "Invalid run request"), details: detail.details };
+    }
+    if (result.error || !result.run) {
+      const status = result.status === 404 ? 404 : 422;
+      await writeV1Audit(store, decision, "POST", "/v1/runs", undefined, status, 0, 0);
+      return jsonV1(c, { error: result.error || "Invalid run request", code: "invalid_request", details: result.details }, status, decision);
+    }
+    c.executionCtx.waitUntil(c.env.RUN_QUEUE.send({
+      type: "run.created",
+      runId: result.run.id,
+      stepRunId: result.stepRun.id,
+      stepId: result.stepRun.stepId
+    }));
+    // Record run ownership so only the creating client can read it.
+    await c.env.CACHE.put(`apiclient:run:${result.run.id}`, decision.client.id, { expirationTtl: 60 * 60 * 24 * 31 });
+    await writeV1Audit(store, decision, "POST", "/v1/runs", result.run.id, 200, 0, 0);
+    return jsonV1(c, { runId: result.run.id, status: "queued" }, 200, decision);
+  }, { flowIdFromBody: true, countsAsRun: true });
+});
+
+app.get("/v1/flows", async (c) => {
+  return handlePublicV1(c, "flows:read", async (store, decision) => {
+    const repository = new D1AgentRepository(c.env.DB);
+    const flows = await repository.listFlows();
+    const visible = flows
+      .filter((flow) => flow && flow.status !== "archived")
+      .filter((flow) => decision.client.allowedFlows.length === 0 || decision.client.allowedFlows.includes(flow.id))
+      .map((flow) => ({ id: flow.id, name: flow.name, description: flow.description, presets: flow.presets }));
+    await writeV1Audit(store, decision, "GET", "/v1/flows", undefined, 200, 0, 0);
+    return jsonV1(c, { flows: visible }, 200, decision);
+  });
+});
+
+app.get("/v1/runs/:runId/artifacts/:artifactId", async (c) => {
+  return handlePublicV1(c, "artifacts:read", async (store, decision) => {
+    const runId = c.req.param("runId");
+    const owned = await requireOwnedRunCloudflare(c, decision, runId);
+    if (!owned.ok) {
+      await writeV1Audit(store, decision, "GET", c.req.path, runId, owned.status, 0, 0);
+      return jsonV1(c, owned.body, owned.status, decision);
+    }
+    const artifact = (owned.run.artifacts || []).find((item) => item.id === c.req.param("artifactId"));
+    if (!artifact) {
+      await writeV1Audit(store, decision, "GET", c.req.path, runId, 404, 0, 0);
+      return jsonV1(c, { error: "Artifact not found", code: "not_found" }, 404, decision);
+    }
+    await writeV1Audit(store, decision, "GET", c.req.path, runId, 200, 0, 0);
+    return jsonV1(c, { id: artifact.id, name: artifact.name, type: artifact.type, version: artifact.version, content: artifact.content }, 200, decision);
+  });
+});
+
+app.get("/v1/runs/:runId/artifacts", async (c) => {
+  return handlePublicV1(c, "artifacts:read", async (store, decision) => {
+    const runId = c.req.param("runId");
+    const owned = await requireOwnedRunCloudflare(c, decision, runId);
+    if (!owned.ok) {
+      await writeV1Audit(store, decision, "GET", c.req.path, runId, owned.status, 0, 0);
+      return jsonV1(c, owned.body, owned.status, decision);
+    }
+    await writeV1Audit(store, decision, "GET", c.req.path, runId, 200, 0, 0);
+    return jsonV1(c, { artifacts: (owned.run.artifacts || []).map((artifact) => ({ id: artifact.id, name: artifact.name, type: artifact.type, version: artifact.version })) }, 200, decision);
+  });
+});
+
+app.get("/v1/runs/:runId/evidence", async (c) => {
+  return handlePublicV1(c, "evidence:read", async (store, decision) => {
+    const runId = c.req.param("runId");
+    const owned = await requireOwnedRunCloudflare(c, decision, runId);
+    if (!owned.ok) {
+      await writeV1Audit(store, decision, "GET", c.req.path, runId, owned.status, 0, 0);
+      return jsonV1(c, owned.body, owned.status, decision);
+    }
+    await writeV1Audit(store, decision, "GET", c.req.path, runId, 200, 0, 0);
+    return jsonV1(c, { evidence: owned.run.evidence || [] }, 200, decision);
+  });
+});
+
+app.get("/v1/runs/:runId", async (c) => {
+  return handlePublicV1(c, "runs:read", async (store, decision) => {
+    const runId = c.req.param("runId");
+    const owned = await requireOwnedRunCloudflare(c, decision, runId);
+    if (!owned.ok) {
+      await writeV1Audit(store, decision, "GET", c.req.path, runId, owned.status, 0, 0);
+      return jsonV1(c, owned.body, owned.status, decision);
+    }
+    await writeV1Audit(store, decision, "GET", c.req.path, runId, 200, 0, 0);
+    return jsonV1(c, {
+      runId: owned.run.id,
+      status: owned.run.status,
+      currentStepId: owned.run.currentStepId,
+      timeline: owned.run.timeline
+    }, 200, decision);
+  });
+});
+
+app.notFound((c) => {
+  if (c.req.path.startsWith("/v1/")) return json({ error: "Not found", code: "not_found" }, { status: 404 });
+  return c.env.ASSETS.fetch(c.req.raw);
+});
 
 export default {
   async fetch(request, env, ctx) {
@@ -1922,6 +2118,88 @@ function notFound(message) {
   throw new HTTPException(404, {
     res: json({ error: message }, { status: 404 })
   });
+}
+
+// --- Public /v1 gateway helpers ---
+
+async function handlePublicV1(c, requiredScope, handler, options = {}) {
+  requireCloudflareBindings(c.env);
+  const store = new WorkerApiGatewayStore(c.env);
+  let flowId;
+  if (options.flowIdFromBody) {
+    const cloned = c.req.raw.clone();
+    const body = await cloned.json().catch(() => ({}));
+    flowId = typeof body.flowId === "string" ? body.flowId : "deep_research";
+  }
+  const decision = await authorizeRequest(store, {
+    method: c.req.method,
+    path: c.req.path,
+    authorization: c.req.header("authorization"),
+    requiredScope,
+    flowId,
+    countsAsRun: options.countsAsRun
+  });
+  if (!decision.allowed) {
+    await writeV1Audit(store, decision, c.req.method, c.req.path, undefined, decision.statusCode, 0, 0);
+    return jsonV1(c, { error: decision.error, code: decision.code }, decision.statusCode, decision);
+  }
+  await store.touchClient(decision.client.id, new Date().toISOString());
+  return handler(store, decision);
+}
+
+function jsonV1(c, payload, status, decision) {
+  const headers = { "content-type": "application/json; charset=utf-8" };
+  if (decision?.headers) {
+    for (const [key, value] of Object.entries(decision.headers)) {
+      if (value !== undefined) headers[key] = value;
+    }
+  }
+  return new Response(JSON.stringify(payload, null, 2), { status, headers });
+}
+
+async function writeV1Audit(store, decision, method, path, runId, statusCode, costUsd, tokens) {
+  const clientId = decision.client ? decision.client.id : undefined;
+  await store.recordAudit({
+    id: store.newAuditId(),
+    clientId,
+    ts: new Date().toISOString(),
+    method,
+    path,
+    runId,
+    statusCode,
+    outcome: decision.allowed ? "allow" : `deny:${decision.reason}`,
+    costUsd: costUsd || 0,
+    tokens: tokens || 0
+  });
+}
+
+async function requireOwnedRunCloudflare(c, decision, runId) {
+  const owner = await c.env.CACHE.get(`apiclient:run:${runId}`).catch(() => null);
+  if (!owner || owner !== decision.client.id) {
+    return { ok: false, status: 404, body: { error: "Run not found", code: "not_found" } };
+  }
+  let result;
+  try {
+    result = await getCloudflareRun(c.env, runId, c.req.raw);
+  } catch {
+    return { ok: false, status: 404, body: { error: "Run not found", code: "not_found" } };
+  }
+  const run = result.run;
+  // Attribute settled usage to the owning client once the run completes.
+  if (run && run.status === "complete") {
+    const attributedKey = `apiclient:run:${runId}:attributed`;
+    const already = await c.env.CACHE.get(attributedKey).catch(() => null);
+    if (!already) {
+      const metrics = createObservabilityReport(run).metrics;
+      await attributeRunUsage(new WorkerApiGatewayStore(c.env), decision.client.id, {
+        costUsd: metrics.totalCostUsd,
+        tokens: metrics.totalTokens,
+        runs: 0
+      });
+      await c.env.CACHE.put(attributedKey, "1", { expirationTtl: 60 * 60 * 24 * 31 });
+    }
+  }
+  return { ok: true, status: 200, run };
 }
 
 class RunCoordinator {
