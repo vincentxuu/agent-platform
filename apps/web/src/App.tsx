@@ -1404,12 +1404,68 @@ function ApiKeyReveal({ apiKey, onClose }: { apiKey: string; onClose: () => void
 function ApiClientCard({ client, onChanged }: { client: ApiClient; onChanged: () => void }) {
   const { t } = useTranslation();
   const [showAudit, setShowAudit] = useState(false);
+  const [editing, setEditing] = useState(false);
+
+  // Edit form state — initialised from client on open
+  const [editName, setEditName] = useState("");
+  const [editScopes, setEditScopes] = useState<string[]>([]);
+  const [editAllowedFlows, setEditAllowedFlows] = useState("");
+  const [editRequestsPerMin, setEditRequestsPerMin] = useState("");
+  const [editRunsPerDay, setEditRunsPerDay] = useState("");
+  const [editMaxCostUsd, setEditMaxCostUsd] = useState("");
+  const [editMaxTokens, setEditMaxTokens] = useState("");
+  const [editError, setEditError] = useState("");
+  const [editSavedMsg, setEditSavedMsg] = useState("");
+
   const audit = useApiQuery(["api-client-audit", client.id], showAudit ? `/api/api-clients/${client.id}/audit` : undefined);
 
   const revoke = useMutation({
     mutationFn: () => apiPost(`/api/api-clients/${client.id}/revoke`, {}),
     onSuccess: () => onChanged()
   });
+
+  const saveEdit = useMutation({
+    mutationFn: () => apiPatch(`/api/api-clients/${client.id}`, {
+      name: editName.trim(),
+      scopes: editScopes,
+      allowedFlows: editAllowedFlows.split(",").map((item) => item.trim()).filter(Boolean),
+      rateLimit: {
+        requestsPerMin: Number(editRequestsPerMin) || undefined,
+        runsPerDay: Number(editRunsPerDay) || undefined
+      },
+      budget: {
+        maxCostUsd: editMaxCostUsd ? Number(editMaxCostUsd) : undefined,
+        maxTokens: editMaxTokens ? Number(editMaxTokens) : undefined
+      }
+    }),
+    onSuccess: async () => {
+      setEditError("");
+      setEditSavedMsg(t("apiClients.editSaved"));
+      setEditing(false);
+      onChanged();
+    },
+    onError: (err) => {
+      setEditSavedMsg("");
+      setEditError(err instanceof Error ? err.message : t("apiClients.editFailed"));
+    }
+  });
+
+  const openEdit = () => {
+    setEditName(client.name);
+    setEditScopes([...client.scopes]);
+    setEditAllowedFlows(client.allowedFlows.join(", "));
+    setEditRequestsPerMin(String(client.rateLimit?.requestsPerMin ?? ""));
+    setEditRunsPerDay(String(client.rateLimit?.runsPerDay ?? ""));
+    setEditMaxCostUsd(String(client.budget?.maxCostUsd ?? ""));
+    setEditMaxTokens(String(client.budget?.maxTokens ?? ""));
+    setEditError("");
+    setEditSavedMsg("");
+    setEditing(true);
+  };
+
+  const toggleEditScope = (scope: string) => {
+    setEditScopes((current) => current.includes(scope) ? current.filter((s) => s !== scope) : [...current, scope]);
+  };
 
   const handleRevoke = () => {
     if (window.confirm(t("apiClients.revokeConfirm"))) revoke.mutate();
@@ -1426,23 +1482,96 @@ function ApiClientCard({ client, onChanged }: { client: ApiClient; onChanged: ()
         </div>
       </CardHeader>
       <CardContent>
-        <div className="grid tight text-sm">
-          <p><strong>{t("apiClients.prefix")}:</strong> <code>{client.keyPrefix}</code></p>
-          <p><strong>{t("apiClients.scopes")}:</strong> {client.scopes.join(", ") || "—"}</p>
-          <p><strong>{t("apiClients.allowedFlows")}:</strong> {client.allowedFlows.length ? client.allowedFlows.join(", ") : "*"}</p>
-          <p><strong>{t("apiClients.rateLimit")}:</strong> {client.rateLimit?.requestsPerMin || "—"}/min · {client.rateLimit?.runsPerDay || "—"}/day</p>
-          <p><strong>{t("apiClients.budget")}:</strong> {client.budget?.maxCostUsd ? `$${client.budget.maxCostUsd}` : "—"} · {client.budget?.maxTokens || "—"} tokens</p>
-          <p><strong>{t("apiClients.usage")}:</strong> {t("apiClients.usageValue", { cost: usage.costUsd.toFixed(3), tokens: usage.tokens })}</p>
-          <p><strong>{t("apiClients.lastUsedAt")}:</strong> {client.lastUsedAt ? new Date(client.lastUsedAt).toLocaleString() : t("apiClients.never")}</p>
-        </div>
-        <div className="mt-3 flex gap-2">
-          {client.status === "active" ? (
-            <Button type="button" variant="secondary" onClick={handleRevoke} disabled={revoke.isPending}>{t("apiClients.revoke")}</Button>
-          ) : null}
-          <Button type="button" variant="ghost" onClick={() => setShowAudit((current) => !current)}>
-            {showAudit ? t("apiClients.hideAudit") : t("apiClients.viewAudit")}
-          </Button>
-        </div>
+        {editing ? (
+          <div className="grid tight">
+            <p className="text-sm font-medium">{t("apiClients.editTitle")}</p>
+            <div>
+              <Label htmlFor={`edit-name-${client.id}`}>{t("apiClients.name")}</Label>
+              <Input
+                id={`edit-name-${client.id}`}
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+              />
+            </div>
+            <div>
+              <Label>{t("apiClients.scopes")}</Label>
+              <div className="flex flex-wrap gap-2">
+                {API_CLIENT_SCOPES.map((scope) => (
+                  <button
+                    key={scope}
+                    type="button"
+                    className={cn(
+                      "rounded-md border border-input px-2.5 py-1 text-sm",
+                      editScopes.includes(scope) ? "border-primary bg-emerald-50 text-foreground" : "text-muted-foreground"
+                    )}
+                    aria-pressed={editScopes.includes(scope)}
+                    onClick={() => toggleEditScope(scope)}
+                  >
+                    {scope}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <Label htmlFor={`edit-flows-${client.id}`}>{t("apiClients.allowedFlows")}</Label>
+              <Input
+                id={`edit-flows-${client.id}`}
+                value={editAllowedFlows}
+                placeholder={t("apiClients.allowedFlowsPlaceholder")}
+                onChange={(e) => setEditAllowedFlows(e.target.value)}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label htmlFor={`edit-rpm-${client.id}`}>{t("apiClients.requestsPerMin")}</Label>
+                <Input id={`edit-rpm-${client.id}`} type="number" value={editRequestsPerMin} onChange={(e) => setEditRequestsPerMin(e.target.value)} />
+              </div>
+              <div>
+                <Label htmlFor={`edit-rpd-${client.id}`}>{t("apiClients.runsPerDay")}</Label>
+                <Input id={`edit-rpd-${client.id}`} type="number" value={editRunsPerDay} onChange={(e) => setEditRunsPerDay(e.target.value)} />
+              </div>
+              <div>
+                <Label htmlFor={`edit-cost-${client.id}`}>{t("apiClients.maxCostUsd")}</Label>
+                <Input id={`edit-cost-${client.id}`} type="number" value={editMaxCostUsd} onChange={(e) => setEditMaxCostUsd(e.target.value)} />
+              </div>
+              <div>
+                <Label htmlFor={`edit-tokens-${client.id}`}>{t("apiClients.maxTokens")}</Label>
+                <Input id={`edit-tokens-${client.id}`} type="number" value={editMaxTokens} onChange={(e) => setEditMaxTokens(e.target.value)} />
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Button type="button" onClick={() => saveEdit.mutate()} disabled={saveEdit.isPending}>
+                {saveEdit.isPending ? t("apiClients.savingEdit") : t("apiClients.saveEdit")}
+              </Button>
+              <Button type="button" variant="secondary" onClick={() => setEditing(false)} disabled={saveEdit.isPending}>
+                {t("apiClients.cancelEdit")}
+              </Button>
+            </div>
+            {editError ? <p className="text-sm text-destructive">{editError}</p> : null}
+          </div>
+        ) : (
+          <>
+            <div className="grid tight text-sm">
+              <p><strong>{t("apiClients.prefix")}:</strong> <code>{client.keyPrefix}</code></p>
+              <p><strong>{t("apiClients.scopes")}:</strong> {client.scopes.join(", ") || "—"}</p>
+              <p><strong>{t("apiClients.allowedFlows")}:</strong> {client.allowedFlows.length ? client.allowedFlows.join(", ") : "*"}</p>
+              <p><strong>{t("apiClients.rateLimit")}:</strong> {client.rateLimit?.requestsPerMin || "—"}/min · {client.rateLimit?.runsPerDay || "—"}/day</p>
+              <p><strong>{t("apiClients.budget")}:</strong> {client.budget?.maxCostUsd ? `$${client.budget.maxCostUsd}` : "—"} · {client.budget?.maxTokens || "—"} tokens</p>
+              <p><strong>{t("apiClients.usage")}:</strong> {t("apiClients.usageValue", { cost: usage.costUsd.toFixed(3), tokens: usage.tokens })}</p>
+              <p><strong>{t("apiClients.lastUsedAt")}:</strong> {client.lastUsedAt ? new Date(client.lastUsedAt).toLocaleString() : t("apiClients.never")}</p>
+            </div>
+            {editSavedMsg ? <p className="mt-2 text-sm text-emerald-600">{editSavedMsg}</p> : null}
+            <div className="mt-3 flex gap-2">
+              <Button type="button" variant="secondary" onClick={openEdit}>{t("apiClients.edit")}</Button>
+              {client.status === "active" ? (
+                <Button type="button" variant="secondary" onClick={handleRevoke} disabled={revoke.isPending}>{t("apiClients.revoke")}</Button>
+              ) : null}
+              <Button type="button" variant="ghost" onClick={() => setShowAudit((current) => !current)}>
+                {showAudit ? t("apiClients.hideAudit") : t("apiClients.viewAudit")}
+              </Button>
+            </div>
+          </>
+        )}
         {showAudit ? (
           <div className="mt-3 grid tight text-sm">
             {(audit.data?.audit || []).length === 0 ? <div className="empty">{t("apiClients.auditEmpty")}</div> : null}

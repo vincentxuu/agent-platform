@@ -246,7 +246,14 @@ export const resources = {
         auditTime: "時間",
         createFailed: "建立 API client 失敗",
         revokeFailed: "Revoke 失敗",
-        nameRequired: "請輸入名稱。"
+        nameRequired: "請輸入名稱。",
+        edit: "編輯",
+        editTitle: "編輯 API Client",
+        saveEdit: "儲存變更",
+        savingEdit: "儲存中…",
+        cancelEdit: "取消",
+        editSaved: "已儲存。",
+        editFailed: "儲存失敗"
       },
       manage: {
         title: "管理",
@@ -606,7 +613,14 @@ export const resources = {
         auditTime: "Time",
         createFailed: "Failed to create API client",
         revokeFailed: "Revoke failed",
-        nameRequired: "Name is required."
+        nameRequired: "Name is required.",
+        edit: "Edit",
+        editTitle: "Edit API Client",
+        saveEdit: "Save changes",
+        savingEdit: "Saving…",
+        cancelEdit: "Cancel",
+        editSaved: "Saved.",
+        editFailed: "Save failed"
       },
       manage: {
         title: "Manage",
