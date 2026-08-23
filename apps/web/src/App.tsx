@@ -1230,7 +1230,7 @@ function Management({ config, readiness, skills }: { config?: ManagementConfig; 
   );
 }
 
-const API_CLIENT_SCOPES = ["runs:write", "runs:read", "artifacts:read", "evidence:read", "flows:read"] as const;
+const API_CLIENT_SCOPES = ["runs:write", "runs:read", "artifacts:read", "evidence:read", "flows:read", "proxy:write"] as const;
 
 type ApiClient = {
   id: string;
