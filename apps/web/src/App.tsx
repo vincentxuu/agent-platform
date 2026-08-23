@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { BookOpen, Boxes, CheckCircle2, CirclePlay, FileOutput, FileText, Gauge, History, KeyRound, Layers3, Plus, Search, Settings2, ShieldCheck, Sparkles } from "lucide-react";
@@ -302,7 +302,7 @@ export function App() {
   }), [activeConfig, health.data, readiness.data]);
 
   return (
-    <SidebarProvider>
+    <SidebarProvider style={{ "--sidebar-width": "18rem" } as CSSProperties}>
       <a className="skip-link" href="#main-content">{t("nav.skipToContent")}</a>
       <AppSidebar
         groups={navGroups}
@@ -1272,31 +1272,39 @@ function ApiClients({ flows }: { flows: FlowSummary[] }) {
           <CardTitle>{t("apiClients.create")}</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid tight">
-            <div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+            <div className="col-span-2">
               <Label htmlFor="api-client-name">{t("apiClients.name")}</Label>
               <Input id="api-client-name" value={name} placeholder={t("apiClients.namePlaceholder")} onChange={(event) => setName(event.target.value)} />
             </div>
-            <div>
+            <div className="col-span-2">
               <Label>{t("apiClients.scopes")}</Label>
               <div className="flex flex-wrap gap-2">
-                {API_CLIENT_SCOPES.map((scope) => (
-                  <button
-                    key={scope}
-                    type="button"
-                    className={cn(
-                      "rounded-md border border-input px-2.5 py-1 text-sm",
-                      scopes.includes(scope) ? "border-primary bg-emerald-50 text-foreground" : "text-muted-foreground"
-                    )}
-                    aria-pressed={scopes.includes(scope)}
-                    onClick={() => toggleScope(scope)}
-                  >
-                    {scope}
-                  </button>
-                ))}
+                {API_CLIENT_SCOPES.map((scope) => {
+                  const active = scopes.includes(scope);
+                  return (
+                    <Badge
+                      key={scope}
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={active}
+                      variant={active ? "success" : "outline"}
+                      className="cursor-pointer select-none transition-colors hover:bg-accent"
+                      onClick={() => toggleScope(scope)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          toggleScope(scope);
+                        }
+                      }}
+                    >
+                      {scope}
+                    </Badge>
+                  );
+                })}
               </div>
             </div>
-            <div>
+            <div className="col-span-2">
               <Label htmlFor="api-client-flows">{t("apiClients.allowedFlows")}</Label>
               <Input
                 id="api-client-flows"
@@ -1305,7 +1313,7 @@ function ApiClients({ flows }: { flows: FlowSummary[] }) {
                 onChange={(event) => setAllowedFlows(event.target.value)}
               />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="col-span-2 grid grid-cols-2 gap-x-4 gap-y-3">
               <div>
                 <Label htmlFor="api-client-rpm">{t("apiClients.requestsPerMin")}</Label>
                 <Input id="api-client-rpm" type="number" value={requestsPerMin} onChange={(event) => setRequestsPerMin(event.target.value)} />
@@ -1323,10 +1331,10 @@ function ApiClients({ flows }: { flows: FlowSummary[] }) {
                 <Input id="api-client-tokens" type="number" value={maxTokens} onChange={(event) => setMaxTokens(event.target.value)} />
               </div>
             </div>
-            <Button type="button" onClick={handleCreate} disabled={createClient.isPending}>
+            <Button type="button" className="col-span-2" onClick={handleCreate} disabled={createClient.isPending}>
               {createClient.isPending ? t("apiClients.creating") : t("apiClients.create")}
             </Button>
-            {error ? <p className="text-sm text-destructive">{error}</p> : null}
+            {error ? <p className="col-span-2 text-sm text-destructive">{error}</p> : null}
           </div>
         </CardContent>
       </Card>

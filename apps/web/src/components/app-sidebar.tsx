@@ -91,7 +91,7 @@ export function AppSidebar({
         </SidebarMenu>
       </SidebarHeader>
 
-      <SidebarContent>
+      <SidebarContent className="gap-2">
         {groups.map((group) => (
           <Collapsible
             key={group.key}
@@ -115,6 +115,7 @@ export function AppSidebar({
                           <SidebarMenuButton
                             asChild
                             isActive={isActive}
+                            size="lg"
                             tooltip={`${item.badge} · ${t(`nav.descriptions.${item.key}`)}`}
                           >
                             <a
