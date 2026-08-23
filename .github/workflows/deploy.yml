@@ -1,0 +1,52 @@
+name: Deploy to Cloudflare
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-cloudflare
+  cancel-in-progress: true
+
+env:
+  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm run check:types
+
+      - name: Build web + ts
+        run: pnpm run build:web && pnpm run build:ts
+
+      - name: Deploy readiness (incl. wrangler deploy --dry-run)
+        run: pnpm run check:deploy-readiness
+
+      - name: Apply D1 migrations
+        run: pnpm exec wrangler d1 migrations apply agent-platform --remote --yes
+
+      - name: Deploy
+        run: pnpm exec wrangler deploy
