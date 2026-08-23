@@ -22,7 +22,7 @@ Agent Platform 是一個 **local-first、可部署到 Cloudflare** 的 AI agent 
 ## 指令一覽
 
 | 指令 | 功能 | 入口 |
-| --- | --- | --- |
+|------|------|------|
 | **Define** | 建立/複製/編輯 flow draft、驗證、發布不可變版本 | Web UI → Define / `POST /api/flows` |
 | **Configure** | 新增/測試/停用 providers、版本化 policies、安裝/eval skills、綁定到 steps | Web UI → Manage / `POST /api/providers`, `/api/policies`, `/api/skills` |
 | **Run** | 從特定 flow version + preset 啟動 run（含輸入驗證） | Web UI → Run / `POST /api/flows/:id/runs` |
@@ -95,15 +95,119 @@ Provider catalog 定義在 `packages/runtime/src/provider-config.json`。Search/
 - Canonical URL 去重、per-host 限制、tracking parameter 移除
 - 每 provider 月度嘗試預算、health-aware routing
 
-## 為什麼選 Agent Platform？
+## OpenAI 相容代理 API (`/v1`) — 直接模型存取
 
-- **Flow-first，不是空白 chatbot**：先定義可控流程，再逐步加入自主性
-- **Command surface 是 MVP**：8 大核心指令（Define→Improve）皆可觸發，不是事後補上的功能
-- **Local-first 開發體驗**：`git clone && pnpm install && npm run dev` 即可跑完整 demo，無需雲端資源
-- **Cloudflare 生產級 runtime**：Workers/D1/KV/R2/Vectorize/Queues/Workflows/DO/Workers AI 完整部署架構
-- **Evidence-backed outputs**：每個主要 claim 皆有 citation 追溯
-- **Policy as configuration**：成本、權限、provider、人工核准皆為一級配置
-- **Durable execution**：長任務可恢復、可重試、可審計
+標準 OpenAI 相容端點，透過平台的路由、備援、預算與可觀測性直接存取 LLM：
+
+```bash
+# 驗證（同樣的 API key 系統，需 `proxy:write` scope）
+export PROXY_KEY="ak_live_..."
+BASE="https://<your-worker>.workers.dev/v1"
+```
+
+**端點：**
+| Method | Path | 說明 |
+|--------|------|------|
+| `GET` | `/v1/models` | 列出可用模型（所有提供者） |
+| `POST` | `/v1/chat/completions` | 對話完成（支援 streaming + 非 streaming） |
+
+**列出模型：**
+```bash
+curl $BASE/v1/models -H "Authorization: Bearer $PROXY_KEY"
+```
+
+**對話完成（非 streaming）：**
+```bash
+curl -X POST $BASE/v1/chat/completions -H "Authorization: Bearer $PROXY_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llama-3.3-70b-versatile",
+    "messages": [{"role": "user", "content": "用一段話解釋量子運算"}],
+    "temperature": 0.7,
+    "max_tokens": 200
+  }'
+```
+
+**對話完成（streaming）：**
+```bash
+curl -X POST $BASE/v1/chat/completions -H "Authorization: Bearer $PROXY_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llama-3.3-70b-versatile",
+    "messages": [{"role": "user", "content": "寫一首關於雲的俳句"}],
+    "stream": true
+  }'
+```
+
+**OpenAI SDK (Python)：**
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://<your-worker>.workers.dev/v1",
+    api_key="ak_live_..."
+)
+
+# 非 streaming
+response = client.chat.completions.create(
+    model="llama-3.3-70b-versatile",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+print(response.choices[0].message.content)
+
+# Streaming
+stream = client.chat.completions.create(
+    model="llama-3.3-70b-versatile",
+    messages=[{"role": "user", "content": "寫一首關於雲的俳句"}],
+    stream=True
+)
+for chunk in stream:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="", flush=True)
+```
+
+**模型 ID 格式：**
+- 短名稱：`gemini-3.5-flash`、`llama-3.3-70b-versatile`、`claude-3.5-sonnet`
+- 提供者前綴：`gemini/gemini-3.5-flash`、`groq/llama-3.3-70b-versatile`、`anthropic/claude-3-5-sonnet-latest`
+- 短名稱會自動解析到最佳提供者（依 `proxy-model-mapping.json` 的優先順序）
+
+**功能：**
+- 自動提供者備援（主要 → 備援鏈）
+- Provider readiness 檢查（只路由到健康的提供者）
+- 使用量歸屬到 API key（budget、rate limit）
+- OpenTelemetry 追蹤（`proxy` spans、fallback 事件）
+
+---
+
+## 外部 API (`/v1`) — Flow 執行
+
+供其他服務程式化存取。與管理用 `/api` 分離。
+
+```bash
+# 在 Web UI → API Clients 發行 key（scope、允許的 flows、rate limit、budget）
+export KEY="ak_live_..."
+
+# 建立 run
+curl -X POST $BASE/v1/runs -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"flowId":"deep_research","presetId":"standard","inputs":{"topic":"agent memory systems","audience":"engineers","freshnessDays":365}}'
+
+# 輪詢直到完成
+curl $BASE/v1/runs/$RUN_ID -H "Authorization: Bearer $KEY"
+
+# 下載 artifact
+curl $BASE/v1/runs/$RUN_ID/artifacts/markdown_report -H "Authorization: Bearer $KEY"
+```
+
+| Method + Path | Scope | 說明 |
+|---------------|-------|------|
+| `POST /v1/runs` | `runs:write` | 建立 run（flow 必須在 key 白名單內） |
+| `GET /v1/runs/:id` | `runs:read` | Run 狀態/timeline（只有建立者可讀） |
+| `GET /v1/runs/:id/artifacts[/:artifactId]` | `artifacts:read` | Artifact 列表/下載 |
+| `GET /v1/runs/:id/evidence` | `evidence:read` | Evidence 列表 |
+| `GET /v1/flows` | `flows:read` | 發現 key 允許的 flows |
+
+錯誤碼：`401` 無效/已撤銷、`403` scope/flow 不允許、`429` 率限制（含 `Retry-After`、`X-RateLimit-*`）、`402` 預算超支（僅阻擋建立 run，唯讀請求豁免）。
 
 ## 部署到 Cloudflare
 
@@ -143,36 +247,6 @@ curl https://<your-worker>.workers.dev/api/readiness
 ```
 
 CI/CD：推送到 `main` 會在 `npm run check` 通過後自動部署（需 GitHub secrets：`CLOUDFLARE_ACCOUNT_ID`、`CLOUDFLARE_API_TOKEN`）。
-
-## 外部 API (`/v1`)
-
-供其他服務程式化存取。與管理用 `/api` 分離。
-
-```bash
-# 在 Web UI → API Clients 發行 key（scope、允許的 flows、rate limit、budget）
-export KEY="ak_live_..."
-
-# 建立 run
-curl -X POST $BASE/v1/runs -H "Authorization: Bearer $KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"flowId":"deep_research","presetId":"standard","inputs":{"topic":"agent memory systems","audience":"engineers","freshnessDays":365}}'
-
-# 輪詢直到完成
-curl $BASE/v1/runs/$RUN_ID -H "Authorization: Bearer $KEY"
-
-# 下載 artifact
-curl $BASE/v1/runs/$RUN_ID/artifacts/markdown_report -H "Authorization: Bearer $KEY"
-```
-
-| Method + Path | Scope | 說明 |
-|---------------|-------|------|
-| `POST /v1/runs` | `runs:write` | 建立 run（flow 必須在 key 白名單內） |
-| `GET /v1/runs/:id` | `runs:read` | Run 狀態/timeline（只有建立者可讀） |
-| `GET /v1/runs/:id/artifacts[/:artifactId]` | `artifacts:read` | Artifact 列表/下載 |
-| `GET /v1/runs/:id/evidence` | `evidence:read` | Evidence 列表 |
-| `GET /v1/flows` | `flows:read` | 發現 key 允許的 flows |
-
-錯誤碼：`401` 無效/已撤銷、`403` scope/flow 不允許、`429` 率限制（含 `Retry-After`、`X-RateLimit-*`）、`402` 預算超支（僅阻擋建立 run，唯讀請求豁免）。
 
 ## 執行模式
 
