@@ -16,6 +16,18 @@ import {
   fetchProviderModelIds,
   getProviderCatalogEntry
 } from "../../../packages/runtime/src/provider-catalog.js";
+import {
+  loadProxyModelMapping,
+  getMappedProviders,
+  getModelList
+} from "../../../packages/runtime/src/proxy-model-mapping.js";
+import {
+  normalizeChatCompletionRequest,
+  normalizeChatCompletionResponse,
+  normalizeStreamChunk,
+  normalizeModelList,
+  SupportedProvider
+} from "../../../packages/runtime/src/proxy-normalization.js";
 import { DeepResearchWorkflow } from "./workflow.js";
 import { WorkerApiGatewayStore } from "../../../packages/cloudflare/src/api-gateway-store.js";
 import {
@@ -29,7 +41,6 @@ import {
   normalizeScopes,
   toPublicClient
 } from "../../../packages/runtime/src/api-gateway.js";
-
 export { DeepResearchWorkflow, RunCoordinator };
 
 const app = new Hono();
@@ -534,6 +545,213 @@ app.get("/v1/runs/:runId", async (c) => {
       timeline: owned.run.timeline
     }, 200, decision);
   });
+});
+
+// --- Proxy API: OpenAI-compatible endpoints ---
+
+app.get("/v1/models", async (c) => {
+  return handlePublicV1(c, "proxy:write", async (store, decision) => {
+    // Load model mapping
+    const mapping = loadProxyModelMapping();
+    const modelIds = getModelList(mapping);
+    
+    const allModels: Array<{ id: string; object: string; created: number; owned_by: string }> = [];
+    
+    // Add mapped models
+    for (const modelId of modelIds) {
+      allModels.push({
+        id: modelId,
+        object: "model",
+        created: Math.floor(Date.now() / 1000),
+        owned_by: "agent-platform"
+      });
+    }
+
+    // Add provider-specific models from catalog
+    try {
+      for (const providerId of DEFAULT_ALLOWED_PROVIDER_IDS) {
+        const catalogEntry = getProviderCatalogEntry(providerId);
+        if (catalogEntry?.models) {
+          for (const model of catalogEntry.models) {
+            const prefixedId = `${providerId}/${model}`;
+            if (!modelIds.includes(prefixedId)) {
+              allModels.push({
+                id: prefixedId,
+                object: "model",
+                created: Math.floor(Date.now() / 1000),
+                owned_by: providerId
+              });
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // Catalog unavailable, continue with mapped models
+    }
+
+    await writeV1Audit(store, decision, "GET", "/v1/models", undefined, 200, 0, 0);
+    return jsonV1(c, normalizeModelList(allModels, "agent-platform"), 200, decision);
+  }, { countsAsProxy: true });
+});
+
+app.post("/v1/chat/completions", async (c) => {
+  return handlePublicV1(c, "proxy:write", async (store, decision) => {
+    let body: any;
+    try {
+      body = await c.req.json();
+    } catch {
+      await writeV1Audit(store, decision, "POST", "/v1/chat/completions", undefined, 400, 0, 0);
+      return jsonV1(c, { error: "Invalid JSON body", code: "invalid_request" }, 400, decision);
+    }
+
+    // Validate required fields
+    const { model, messages, stream, temperature, max_tokens, top_p, stop } = body;
+    if (!model || typeof model !== "string") {
+      await writeV1Audit(store, decision, "POST", "/v1/chat/completions", undefined, 400, 0, 0);
+      return jsonV1(c, { error: "Missing required field: model", code: "invalid_request" }, 400, decision);
+    }
+    if (!Array.isArray(messages) || messages.length === 0) {
+      await writeV1Audit(store, decision, "POST", "/v1/chat/completions", undefined, 400, 0, 0);
+      return jsonV1(c, { error: "Missing required field: messages", code: "invalid_request" }, 400, decision);
+    }
+
+    // Check proxy budget
+    const budget = decision.client.budget || {};
+    if (typeof budget.proxyMaxCostUsd === "number" || typeof budget.proxyMaxTokens === "number") {
+      const proxyWindow = budget.proxyWindow === "daily" ? dayBucket(new Date()) : monthlyWindowKey(new Date());
+      const usage = await store.getUsage(decision.client.id, `proxy:${proxyWindow}`);
+      if (usage.costUsd >= (budget.proxyMaxCostUsd ?? Infinity) || usage.tokens >= (budget.proxyMaxTokens ?? Infinity)) {
+        await writeV1Audit(store, decision, "POST", "/v1/chat/completions", undefined, 402, 0, 0);
+        return jsonV1(c, { error: "Proxy budget exceeded", code: "budget_exceeded" }, 402, decision);
+      }
+    }
+
+    // Resolve model to providers with fallback chain
+    // Support both "model" and "provider/model" formats
+    const modelKey = model.includes("/") ? model.split("/").slice(1).join("/") : model;
+    const mappedProviders = getMappedProviders(modelKey);
+    if (mappedProviders.length === 0) {
+      await writeV1Audit(store, decision, "POST", "/v1/chat/completions", undefined, 404, 0, 0);
+      return jsonV1(c, { error: `Model not found: ${model}`, code: "model_not_found" }, 404, decision);
+    }
+
+    // Validate messages structure
+    for (const msg of messages) {
+      if (!msg.role || !["system", "user", "assistant", "tool"].includes(msg.role)) {
+        await writeV1Audit(store, decision, "POST", "/v1/chat/completions", undefined, 400, 0, 0);
+        return jsonV1(c, { error: "Invalid message role", code: "invalid_request" }, 400, decision);
+      }
+      if (msg.content !== null && typeof msg.content !== "string" && !Array.isArray(msg.content)) {
+        await writeV1Audit(store, decision, "POST", "/v1/chat/completions", undefined, 400, 0, 0);
+        return jsonV1(c, { error: "Invalid message content", code: "invalid_request" }, 400, decision);
+      }
+    }
+    const isStreaming = stream === true;
+
+    // Load management config and check provider readiness once
+    const config = await loadManagementConfig(c.env);
+    const readiness = createProviderReadiness(c.env);
+    
+    // Filter mapped providers to only include ready ones, prioritizing primary over fallback
+    const availableProviders = mappedProviders
+      .filter(mapped => readiness[mapped.providerId] === true)
+      .sort((a, b) => (a.isFallback === b.isFallback ? 0 : a.isFallback ? 1 : -1));
+    
+    if (availableProviders.length === 0) {
+      await writeV1Audit(store, decision, "POST", "/v1/chat/completions", undefined, 503, 0, 0);
+      return jsonV1(c, { error: "No available providers for model", code: "no_available_providers" }, 503, decision);
+    }
+
+    // Try each provider in fallback chain
+    let lastError: Error | null = null;
+    for (let i = 0; i < availableProviders.length; i++) {
+      const mapped = availableProviders[i];
+      const providerId = mapped.providerId as SupportedProvider;
+      
+      try {
+        // Normalize request for target provider
+        const normalizedRequest = normalizeChatCompletionRequest(body, providerId);
+        
+        if (isStreaming) {
+          const encoder = new TextEncoder();
+          const readable = new ReadableStream({
+            async start(controller) {
+              const reader = providerStream.getReader();
+              const decoder = new TextDecoder();
+              let buffer = "";
+              
+              try {
+                while (true) {
+                  const { done, value } = await reader.read();
+                  if (done) break;
+                  
+                  buffer += decoder.decode(value, { stream: true });
+                  const lines = buffer.split("\n");
+                  buffer = lines.pop() || "";
+                  
+                  for (const line of lines) {
+                    if (line.startsWith("data: ")) {
+                      const data = line.slice(6).trim();
+                      if (data === "[DONE]") continue;
+                      try {
+                        const chunk = JSON.parse(data);
+                        const normalizedChunk = normalizeStreamChunk(chunk, model, providerId);
+                        controller.enqueue(encoder.encode(`data: ${JSON.stringify(normalizedChunk)}\n\n`));
+                      } catch {
+                        // Skip invalid JSON
+                      }
+                    }
+                  }
+                }
+              } finally {
+                reader.releaseLock();
+              }
+              
+              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+              controller.close();
+            }
+          });
+          
+          await writeV1Audit(store, decision, "POST", "/v1/chat/completions", undefined, 200, 0, 0);
+          return new Response(readable, {
+            headers: {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              "Connection": "keep-alive"
+            }
+          });
+        } else {
+          // Non-streaming response using existing invoke function
+          const providerResponse = await invokeProviderModel(c.env, config, providerId, normalizedRequest.model, 
+            normalizedRequest.messages.map((m: any) => m.content).join("\n"), 
+            normalizedRequest.max_tokens || 4096);
+          
+          const normalizedResponse = normalizeChatCompletionResponse(
+            { 
+              id: `chatcmpl-${Date.now()}`,
+              object: "chat.completion",
+              created: Math.floor(Date.now() / 1000),
+              model: model,
+              choices: [{ index: 0, message: { role: "assistant", content: providerResponse }, finish_reason: "stop" }],
+              usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+            }, 
+            model, 
+            providerId
+          );
+          await writeV1Audit(store, decision, "POST", "/v1/chat/completions", undefined, 200, 0, 0);
+          return jsonV1(c, normalizedResponse, 200, decision);
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        console.error(`Provider ${providerId} failed for model ${model}:`, lastError);
+        continue;
+      }
+    }
+
+    // All providers failed
+    await writeV1Audit(store, decision, "POST", "/v1/chat/completions", undefined, 502, 0, 0);
+    return jsonV1(c, { error: `All providers failed for model: ${model}`, code: "provider_unavailable", detail: lastError?.message }, 502, decision);
+  }, { countsAsProxy: true });
 });
 
 app.notFound((c) => {
@@ -1539,6 +1757,129 @@ async function invokeProviderModel(env, config, providerId, model, prompt, maxTo
   }
 
   return `${providerId} is configured for ${model}. Live invocation is not implemented for this provider type.`;
+}
+
+async function invokeProviderModelStream(
+  env: any,
+  config: any,
+  providerId: string,
+  request: any
+): Promise<ReadableStream> {
+  const apiKey = providerSecret(env, config, providerId);
+
+  // OpenAI-compatible providers (OpenAI, Groq, OpenRouter, NVIDIA, Cerebras, Ollama Cloud, Ollama, OpenCode Zen)
+  const openaiCompatibleProviders = [
+    "openai", "groq", "openrouter", "nvidia", "cerebras", 
+    "ollama_cloud", "ollama", "opencode-zen"
+  ];
+  
+  if (openaiCompatibleProviders.includes(providerId)) {
+    const baseUrl = openAiCompatibleBaseUrl(env, providerId);
+    const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
+        "accept": "text/event-stream"
+      },
+      body: JSON.stringify({ ...request, stream: true })
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error?.message || payload.message || response.statusText);
+    }
+    return response.body!;
+  }
+
+  if (providerId === "anthropic") {
+    const systemMessage = request.messages.find((m: any) => m.role === "system");
+    const nonSystemMessages = request.messages.filter((m: any) => m.role !== "system");
+    
+    const anthropicRequest = {
+      model: request.model,
+      max_tokens: request.max_tokens || 4096,
+      messages: nonSystemMessages.map((m: any) => ({
+        role: m.role === "assistant" ? "assistant" : "user",
+        content: Array.isArray(m.content) 
+          ? m.content.map((c: any) => c.type === "text" ? { type: "text", text: c.text } : c) 
+          : [{ type: "text", text: String(m.content ?? "") }]
+      })),
+      stream: true,
+      temperature: request.temperature,
+      top_p: request.top_p,
+      stop_sequences: request.stop ? (Array.isArray(request.stop) ? request.stop : [request.stop]) : undefined
+    };
+    
+    if (systemMessage) {
+      anthropicRequest.system = Array.isArray(systemMessage.content) 
+        ? systemMessage.content.map((c: any) => c.type === "text" ? c.text : "").join("\n")
+        : String(systemMessage.content ?? "");
+    }
+    
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "anthropic-version": "2023-06-01",
+        "x-api-key": providerSecret(env, config, providerId),
+        "accept": "text/event-stream"
+      },
+      body: JSON.stringify(anthropicRequest)
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error?.message || payload.message || response.statusText);
+    }
+    return response.body!;
+  }
+
+  if (providerId === "gemini") {
+    const contents = request.messages.map((m: any) => ({
+      role: m.role === "assistant" ? "model" : "user",
+      parts: Array.isArray(m.content) 
+        ? m.content.map((c: any) => c.type === "text" ? { text: c.text } : c) 
+        : [{ text: String(m.content ?? "") }]
+    }));
+    
+    const generationConfig: Record<string, any> = {};
+    if (request.temperature !== undefined) generationConfig.temperature = request.temperature;
+    if (request.max_tokens !== undefined) generationConfig.maxOutputTokens = request.max_tokens;
+    if (request.top_p !== undefined) generationConfig.topP = request.top_p;
+    if (request.stop !== undefined) generationConfig.stopSequences = Array.isArray(request.stop) ? request.stop : [request.stop];
+    
+    const geminiRequest = {
+      contents,
+      generationConfig: Object.keys(generationConfig).length > 0 ? generationConfig : undefined
+    };
+    
+    // Gemini API expects model name in format "models/gemini-2.0-flash" for streaming
+    const modelName = request.model.startsWith("models/") ? request.model : `models/${request.model}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/${modelName}:streamGenerateContent?key=${encodeURIComponent(apiKey)}`;
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(geminiRequest)
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error?.message || payload.message || response.statusText);
+    }
+    return response.body!;
+  }
+
+  if (providerId === "workers_ai") {
+    const response = await env.AI.run(request.model, {
+      messages: request.messages,
+      max_tokens: request.max_tokens,
+      stream: true,
+      temperature: request.temperature,
+      top_p: request.top_p
+    });
+    return response as ReadableStream;
+  }
+
+  throw new Error(`Streaming not implemented for provider: ${providerId}`);
 }
 
 function providerSecret(env, config, providerId) {

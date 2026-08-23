@@ -73,6 +73,78 @@ export class ObservabilityEvidenceArtifacts {
     return point;
   }
 
+  // --- Proxy observability ---
+  startProxySpan({ runId, clientId, model, providerId, isFallback, fallbackIndex, metadata = {} }) {
+    const span = this.startSpan({
+      runId,
+      type: "proxy_request",
+      name: `proxy:${model}:${providerId}`,
+      metadata: {
+        clientId,
+        model,
+        providerId,
+        isFallback,
+        fallbackIndex,
+        ...metadata
+      }
+    });
+    return span;
+  }
+
+  finishProxySpan(spanId, { status = "succeeded", tokensInput = 0, tokensOutput = 0, costUsd = 0, error } = {}) {
+    const span = this.finishSpan(spanId, { status, outputRef: `tokens_in:${tokensInput},tokens_out:${tokensOutput},cost:${costUsd}`, error });
+    // Record proxy-specific metrics
+    this.recordMetric("proxy_request_duration_ms", span.durationMs, { runId: span.runId, model: span.metadata?.model, provider: span.metadata?.providerId });
+    this.recordMetric("proxy_tokens_input", tokensInput, { runId: span.runId, model: span.metadata?.model, provider: span.metadata?.providerId });
+    this.recordMetric("proxy_tokens_output", tokensOutput, { runId: span.runId, model: span.metadata?.model, provider: span.metadata?.providerId });
+    this.recordMetric("proxy_cost_usd", costUsd, { runId: span.runId, model: span.metadata?.model, provider: span.metadata?.providerId });
+    if (span.metadata?.isFallback) {
+      this.recordMetric("proxy_fallback_count", 1, { runId: span.runId, model: span.metadata?.model, provider: span.metadata?.providerId, fallbackIndex: span.metadata?.fallbackIndex });
+    }
+    return span;
+  }
+
+  recordFallbackAttempt({ runId, traceSpanId, fromProviderId, toProviderId, reason, status, durationMs, error }) {
+    this.recordEvent({
+      runId,
+      traceSpanId,
+      type: "proxy_fallback",
+      payload: { fromProviderId, toProviderId, reason, status, durationMs, error }
+    });
+    this.recordMetric("proxy_fallback_count", 1, { runId, fromProvider: fromProviderId, toProvider: toProviderId, status });
+  }
+
+  recordProxyStreamChunks(spanId, chunkCount: number) {
+    const span = this.traceSpans.find(s => s.id === spanId);
+    if (span) {
+      this.recordMetric("proxy_stream_chunks", chunkCount, { runId: span.runId, model: span.metadata?.model, provider: span.metadata?.providerId });
+    }
+  }
+
+  getProxyMetricsByClient(runId: string) {
+    return this.metricPoints.filter(p => p.dimensions.runId === runId && p.metricName.startsWith("proxy_"));
+  }
+
+  getProxyMetricsByModel(runId: string) {
+    return this.metricPoints.filter(p => p.dimensions.runId === runId && p.metricName.startsWith("proxy_"))
+      .reduce((acc, p) => {
+        const model = p.dimensions.model || "unknown";
+        if (!acc[model]) acc[model] = [];
+        acc[model].push(p);
+        return acc;
+      }, {} as Record<string, any[]>);
+  }
+
+  getProxyMetricsByProvider(runId: string) {
+    return this.metricPoints.filter(p => p.dimensions.runId === runId && p.metricName.startsWith("proxy_"))
+      .reduce((acc, p) => {
+        const provider = p.dimensions.provider || "unknown";
+        if (!acc[provider]) acc[provider] = [];
+        acc[provider].push(p);
+        return acc;
+      }, {} as Record<string, any[]>);
+  }
+
   addSource(source) {
     const record = {
       id: source.id || this.idFactory("source"),

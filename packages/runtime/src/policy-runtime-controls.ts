@@ -22,6 +22,7 @@ export class PolicyRuntimeControls {
       security: policy.security || {},
       human: policy.human || {},
       retry: policy.retry || {},
+      proxy: policy.proxy || {},
       createdAt: now(),
       updatedAt: now()
     };
@@ -218,6 +219,116 @@ export class PolicyRuntimeControls {
       openedAt: now()
     });
     return signal;
+  }
+
+  // --- Proxy policy guards ---
+  runProxyGuards({ policyId, runId, stepRunId, clientId, model, usage, isStreaming }) {
+    const policy = this.requirePolicy(policyId);
+    const results = [];
+
+    // 1. Model allow/deny list
+    const allowedModels = policy.proxy?.allowedModels || [];
+    const deniedModels = policy.proxy?.deniedModels || [];
+    
+    if (allowedModels.length > 0 && !allowedModels.includes(model)) {
+      results.push(this.recordGuardResult({
+        runId,
+        stepRunId,
+        guardType: "proxy.model_denied",
+        status: "blocked",
+        mode: "block",
+        message: `Model '${model}' is not in allowed models list`,
+        metadata: { model, allowedModels }
+      }));
+    }
+    
+    if (deniedModels.includes(model)) {
+      results.push(this.recordGuardResult({
+        runId,
+        stepRunId,
+        guardType: "proxy.model_denied",
+        status: "blocked",
+        mode: "block",
+        message: `Model '${model}' is explicitly denied`,
+        metadata: { model }
+      }));
+    }
+
+    // 2. Proxy budget checks
+    const proxyBudget = policy.proxy?.budget || {};
+    const checks = [
+      ["proxy.budget.cost", usage?.proxyCostUsd, proxyBudget.maxCostUsd],
+      ["proxy.budget.tokens", usage?.proxyTokens, proxyBudget.maxTokens],
+      ["proxy.budget.requests", usage?.proxyRequests, proxyBudget.maxRequests],
+      ["proxy.budget.daily_cost", usage?.proxyDailyCost, proxyBudget.maxDailyCost],
+      ["proxy.budget.daily_tokens", usage?.proxyDailyTokens, proxyBudget.maxDailyTokens],
+    ];
+
+    for (const [guardType, actual, limit] of checks) {
+      if (limit !== undefined && actual !== undefined && actual > limit) {
+        results.push(this.recordGuardResult({
+          runId,
+          stepRunId,
+          guardType,
+          status: "blocked",
+          mode: "block",
+          message: `${guardType} ${actual} exceeds ${limit}`,
+          metadata: { actual, limit }
+        }));
+      }
+    }
+
+    // 3. Daily budget window check
+    if (proxyBudget.dailyWindowReset) {
+      const lastReset = usage?.proxyLastDailyReset;
+      const now = Date.now();
+      const windowMs = 24 * 60 * 60 * 1000; // 24 hours
+      if (lastReset && (now - lastReset) > windowMs) {
+        // Daily window has passed, budget should be reset
+        // This is informational - actual reset happens in usage tracking
+        results.push(this.pass(runId, stepRunId, "proxy.daily_window"));
+      }
+    }
+
+    // 4. Rate limit per minute (for streaming)
+    if (proxyBudget.maxRequestsPerMinute && usage?.proxyRequestsThisMinute) {
+      if (usage.proxyRequestsThisMinute > proxyBudget.maxRequestsPerMinute) {
+        results.push(this.recordGuardResult({
+          runId,
+          stepRunId,
+          guardType: "proxy.rate_limit",
+          status: "blocked",
+          mode: "block",
+          message: `Proxy rate limit exceeded: ${usage.proxyRequestsThisMinute}/${proxyBudget.maxRequestsPerMinute} req/min`,
+          metadata: { actual: usage.proxyRequestsThisMinute, limit: proxyBudget.maxRequestsPerMinute }
+        }));
+      }
+    }
+
+    return results.length > 0 ? results : [this.pass(runId, stepRunId, "proxy")];
+  }
+
+  // --- Proxy budget tracking helper ---
+  getProxyBudgetStatus(policyId: string, usage: any) {
+    const policy = this.requirePolicy(policyId);
+    const proxyBudget = policy.proxy?.budget || {};
+    
+    return {
+      costUsd: usage.proxyCostUsd || 0,
+      maxCostUsd: proxyBudget.maxCostUsd,
+      costPercent: proxyBudget.maxCostUsd ? ((usage.proxyCostUsd || 0) / proxyBudget.maxCostUsd) * 100 : 0,
+      tokens: usage.proxyTokens || 0,
+      maxTokens: proxyBudget.maxTokens,
+      tokensPercent: proxyBudget.maxTokens ? ((usage.proxyTokens || 0) / proxyBudget.maxTokens) * 100 : 0,
+      requests: usage.proxyRequests || 0,
+      maxRequests: proxyBudget.maxRequests,
+      dailyCost: usage.proxyDailyCost || 0,
+      maxDailyCost: proxyBudget.maxDailyCost,
+      dailyTokens: usage.proxyDailyTokens || 0,
+      maxDailyTokens: proxyBudget.maxDailyTokens,
+      requestsThisMinute: usage.proxyRequestsThisMinute || 0,
+      maxRequestsPerMinute: proxyBudget.maxRequestsPerMinute
+    };
   }
 
   recordEscalation({ runId, stepRunId, reason, action, outcome, originalContextRef, metadata = {} }) {

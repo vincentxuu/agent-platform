@@ -9,7 +9,8 @@ export type ApiScope =
   | "runs:read"
   | "artifacts:read"
   | "evidence:read"
-  | "flows:read";
+  | "flows:read"
+  | "proxy:write";
 
 export type ApiClientStatus = "active" | "revoked";
 
@@ -17,11 +18,16 @@ export type ApiClientRateLimit = {
   requestsPerMin?: number;
   runsPerDay?: number;
 };
-
 export type ApiClientBudget = {
   maxCostUsd?: number;
   maxTokens?: number;
   window?: "monthly";
+  proxyMaxCostUsd?: number;
+  proxyMaxTokens?: number;
+  proxyWindow?: "daily" | "monthly";
+  proxyDailyTokens?: number;
+  proxyDailyCost?: number;
+  proxyRateLimitRpm?: number;
 };
 
 export type ApiClientRecord = {
@@ -45,6 +51,8 @@ export type ApiClientUsage = {
   costUsd: number;
   tokens: number;
   runs: number;
+  proxyCostUsd?: number;
+  proxyTokens?: number;
 };
 
 export type RateWindowKind = "requestsPerMin" | "runsPerDay";
@@ -86,6 +94,8 @@ export type GatewayRequest = {
   flowId?: string;
   // Whether this request counts against the runsPerDay budget (run creation).
   countsAsRun?: boolean;
+  // Whether this request counts against proxy budget/rate limits (proxy endpoints).
+  countsAsProxy?: boolean;
   now?: Date;
 };
 
@@ -114,7 +124,8 @@ export const API_SCOPES: ApiScope[] = [
   "runs:read",
   "artifacts:read",
   "evidence:read",
-  "flows:read"
+  "flows:read",
+  "proxy:write"
 ];
 
 const KEY_PREFIX_NAMESPACE = "ak_live_";
@@ -199,14 +210,15 @@ export function hasScope(client: ApiClientRecord, scope: ApiScope): boolean {
 }
 
 export function isFlowAllowed(client: ApiClientRecord, flowId: string): boolean {
-  // Empty allow-list means every flow within scope is permitted.
-  if (!client.allowedFlows || client.allowedFlows.length === 0) return true;
-  return client.allowedFlows.includes(flowId);
+  return client.allowedFlows.length === 0 || client.allowedFlows.includes(flowId);
 }
-
 export function isBudgetExceeded(usage: ApiClientUsage, budget: ApiClientBudget): boolean {
   if (typeof budget.maxCostUsd === "number" && usage.costUsd >= budget.maxCostUsd) return true;
   if (typeof budget.maxTokens === "number" && usage.tokens >= budget.maxTokens) return true;
+  if (typeof budget.proxyMaxCostUsd === "number" && (usage.proxyCostUsd ?? 0) >= budget.proxyMaxCostUsd) return true;
+  if (typeof budget.proxyMaxTokens === "number" && (usage.proxyTokens ?? 0) >= budget.proxyMaxTokens) return true;
+  if (typeof budget.proxyDailyCost === "number" && (usage.proxyCostUsd ?? 0) >= budget.proxyDailyCost) return true;
+  if (typeof budget.proxyDailyTokens === "number" && (usage.proxyTokens ?? 0) >= budget.proxyDailyTokens) return true;
   return false;
 }
 
@@ -287,7 +299,8 @@ export async function authorizeRequest(store: ApiGatewayStore, request: GatewayR
     }
   }
 
-  // 6. Budget check against current period usage. Only run-creating requests
+
+  // 7. Budget check against current period usage. Only run-creating requests
   // consume budget, so read-only requests (status/artifact/evidence polls) are
   // exempt — a client that blew its budget can still retrieve already-paid-for
   // results.
@@ -296,6 +309,30 @@ export async function authorizeRequest(store: ApiGatewayStore, request: GatewayR
     const usage = await store.getUsage(client.id, monthlyWindowKey(now));
     if (isBudgetExceeded(usage, budget)) {
       return denyResponse(402, "Budget exceeded", "budget_exceeded", "budget", rateHeaders, client);
+    }
+  }
+  // 8. Proxy budget check for proxy endpoints.
+  if (request.countsAsProxy) {
+    const proxyWindow = budget.proxyWindow === "daily" ? dayBucket(now) : monthlyWindowKey(now);
+    const proxyWindowKey = `proxy:${proxyWindow}`;
+    const usage = await store.getUsage(client.id, proxyWindowKey);
+    if (isBudgetExceeded(usage, budget)) {
+      return denyResponse(402, "Proxy budget exceeded", "budget_exceeded", "proxy_budget", rateHeaders, client);
+    }
+    // 9. Proxy rate limit (per-minute request count for proxy endpoints).
+    const proxyRateLimitRpm = budget.proxyRateLimitRpm ?? client.rateLimit?.requestsPerMin;
+    if (typeof proxyRateLimitRpm === "number" && proxyRateLimitRpm > 0) {
+      const windowKey = `rate:${client.id}:proxy:rpm:${minuteBucket(now)}`;
+      const ttl = secondsUntilNextMinute(now);
+      const count = await store.incrRateWindow(windowKey, ttl);
+      const remaining = Math.max(0, proxyRateLimitRpm - count);
+      rateHeaders["X-Proxy-RateLimit-Limit"] = String(proxyRateLimitRpm);
+      rateHeaders["X-Proxy-RateLimit-Remaining"] = String(remaining);
+      rateHeaders["X-Proxy-RateLimit-Reset"] = String(ttl);
+      if (count > proxyRateLimitRpm) {
+        rateHeaders["Retry-After"] = String(ttl);
+        return denyResponse(429, "Proxy rate limit exceeded", "rate_limited", "proxy_requests_per_min", rateHeaders, client);
+      }
     }
   }
 
@@ -352,7 +389,6 @@ export function normalizeRateLimit(input: unknown): ApiClientRateLimit {
   }
   return rateLimit;
 }
-
 export function normalizeBudget(input: unknown): ApiClientBudget {
   const source = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
   const budget: ApiClientBudget = { window: "monthly" };
@@ -361,6 +397,24 @@ export function normalizeBudget(input: unknown): ApiClientBudget {
   }
   if (Number.isFinite(Number(source.maxTokens)) && Number(source.maxTokens) > 0) {
     budget.maxTokens = Math.floor(Number(source.maxTokens));
+  }
+  if (Number.isFinite(Number(source.proxyMaxCostUsd)) && Number(source.proxyMaxCostUsd) > 0) {
+    budget.proxyMaxCostUsd = Number(source.proxyMaxCostUsd);
+  }
+  if (Number.isFinite(Number(source.proxyMaxTokens)) && Number(source.proxyMaxTokens) > 0) {
+    budget.proxyMaxTokens = Math.floor(Number(source.proxyMaxTokens));
+  }
+  if (typeof source.proxyWindow === "string" && (source.proxyWindow === "daily" || source.proxyWindow === "monthly")) {
+    budget.proxyWindow = source.proxyWindow;
+  }
+  if (Number.isFinite(Number(source.proxyDailyCost)) && Number(source.proxyDailyCost) > 0) {
+    budget.proxyDailyCost = Number(source.proxyDailyCost);
+  }
+  if (Number.isFinite(Number(source.proxyDailyTokens)) && Number(source.proxyDailyTokens) > 0) {
+    budget.proxyDailyTokens = Math.floor(Number(source.proxyDailyTokens));
+  }
+  if (Number.isFinite(Number(source.proxyRateLimitRpm)) && Number(source.proxyRateLimitRpm) > 0) {
+    budget.proxyRateLimitRpm = Math.floor(Number(source.proxyRateLimitRpm));
   }
   return budget;
 }

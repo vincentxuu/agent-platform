@@ -45,6 +45,67 @@ export class ProviderRegistry {
     return candidates.find((provider) => provider.healthStatus !== "down") || candidates[0] || null;
   }
 
+  // --- Proxy model selection ---
+  selectProviderForProxyModel(modelId: string, mappedProviders: Array<{ providerId: string; isFallback: boolean; fallbackIndex: number }>) {
+    const maxAttempts = 3;
+    const attempts: Array<{ providerId: string; isFallback: boolean; fallbackIndex: number }> = [];
+    
+    for (const mapped of mappedProviders) {
+      if (attempts.length >= maxAttempts) break;
+      const provider = this.providers.get(mapped.providerId);
+      if (!provider || !provider.enabled) continue;
+      if (provider.healthStatus === "down") continue;
+      attempts.push(mapped);
+    }
+    
+    return attempts.map(m => ({
+      providerId: m.providerId,
+      isFallback: m.isFallback,
+      fallbackIndex: m.fallbackIndex
+    }));
+  }
+
+  getProxyModelProviders(modelId: string, proxyModelMapping: any) {
+    // This will be called with the loaded proxy model mapping
+    // Return all providers that can serve this model (primary + fallbacks)
+    const entry = proxyModelMapping?.models?.[modelId];
+    if (!entry) return [];
+    
+    const result: Array<{ providerId: string; isFallback: boolean; fallbackIndex: number }> = [];
+    
+    // Primary providers
+    for (const providerId of entry.providers || []) {
+      const provider = this.providers.get(providerId);
+      if (provider && provider.enabled && provider.healthStatus !== "down") {
+        result.push({ providerId, isFallback: false, fallbackIndex: -1 });
+      }
+    }
+    
+    // Fallback providers
+    for (let i = 0; i < (entry.fallback || []).length; i++) {
+      const providerId = entry.fallback[i];
+      const provider = this.providers.get(providerId);
+      if (provider && provider.enabled && provider.healthStatus !== "down") {
+        result.push({ providerId, isFallback: true, fallbackIndex: i });
+      }
+    }
+    
+    return result;
+  }
+
+  // --- Provider readiness for proxy ---
+  isProviderReadyForProxy(providerId: string): boolean {
+    const provider = this.providers.get(providerId);
+    return !!(provider && provider.enabled && provider.healthStatus !== "down");
+  }
+
+  filterReadyProxyModels(modelIds: string[], proxyModelMapping: any): string[] {
+    return modelIds.filter(modelId => {
+      const providers = this.getProxyModelProviders(modelId, proxyModelMapping);
+      return providers.length > 0;
+    });
+  }
+
   registerMcpServer(server) {
     requireString(server.name, "server.name");
     requireString(server.transport, "server.transport");
@@ -139,6 +200,42 @@ export class ProviderRegistry {
       createdAt: now()
     };
     this.toolInvocations.push(record);
+    return record;
+  }
+
+  // --- Proxy request logging ---
+  recordProxyRequest(request: {
+    id?: string;
+    runId?: string;
+    clientId: string;
+    model: string;
+    providerId: string;
+    isFallback: boolean;
+    fallbackIndex: number;
+    status: "success" | "error" | "fallback";
+    tokensInput: number;
+    tokensOutput: number;
+    costUsd: number;
+    durationMs: number;
+    error?: string;
+  }) {
+    const record = {
+      id: request.id || this.idFactory("proxy_request"),
+      runId: request.runId,
+      clientId: request.clientId,
+      model: request.model,
+      providerId: request.providerId,
+      isFallback: request.isFallback,
+      fallbackIndex: request.fallbackIndex,
+      status: request.status,
+      tokensInput: request.tokensInput,
+      tokensOutput: request.tokensOutput,
+      costUsd: request.costUsd,
+      durationMs: request.durationMs,
+      error: request.error,
+      createdAt: now()
+    };
+    this.providerCalls.push(record);
     return record;
   }
 }
