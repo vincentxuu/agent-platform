@@ -1,331 +1,192 @@
+<div align="center">
+
 # Agent Platform
 
-Open-source AI workflow control plane for creating, versioning, running, observing, and verifying auditable agent flows.
+**Open-source AI workflow control plane for creating, versioning, running, observing, and verifying auditable agent flows.**
 
-## 產品定位
+[![CI](https://github.com/agent-platform/agent-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/agent-platform/agent-platform/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+![Status](https://img.shields.io/badge/status-early_preview-orange.svg)
 
-Agent Platform 是 **local-first、Cloudflare-deployable** 的開源 AI workflow control plane。它不是單一萬能聊天機器人，也不是只有一個 Deep Research demo，而是用來建立、管理、執行與驗證可審計 agent flows 的平台。
+[Quick start](#quick-start) · [Architecture](#architecture) · [Providers](#providers) · [Deploy](#deploy-to-cloudflare) · [API](#external-api-v1) · [Docs](#documentation)
 
-Agent Platform 的產品主體不是 CRUD 後台，而是一個可操作的 agent workflow runtime。它要把一次性 prompt 變成可定義、可執行、可觀測、可控制、可驗證、可產出、可改善的工作流程。Flow 是最核心的一級資源；Provider、Policy、Skill、Run、Evidence、Artifact、Eval、Memory 都是支撐這條 runtime loop 的可操作資產。Deep Research 是第一個內建 seed flow / showcase，不是產品邊界。
+[English](README.md) · [繁體中文](README.zh-TW.md)
 
-使用者的真正目標不是「跟 AI 聊天」，而是：
+</div>
 
-- 用可控方式完成高價值工作，例如研究、審查、摘要、回覆、分析、提案
-- 希望結果可追蹤、可驗證、可重跑，而不是只拿到一段無法審計的生成文字
-- 希望團隊可以共用同一套 provider、policy、run history、evidence 與 artifact
+Agent Platform is a local-first, Cloudflare-deployable control plane for AI agent workflows. It gives you a structured runtime to **define, configure, run, observe, control, verify, produce, and improve** multi-step agent flows — not a blank chatbot. Deep Research is the built-in seed flow demonstrating the full loop.
 
-## 核心產品模型
+> [!IMPORTANT]
+> Agent Platform is an early preview (`0.1.0`). APIs, schemas, and deployment behavior may change. It is not a hosted service; you deploy it to your own Cloudflare account.
 
-| 資源 | 說明 |
-|------|------|
-| **Flow** | 可管理的 workflow 定義，包含 metadata、input schema、steps、edges、presets、provider bindings、policy refs、artifact schemas |
-| **Flow Version** | 可發布、可回溯、可從 run 追溯的不可變版本；draft 可編輯，published 版本用於正式 runs |
-| **Run** | 某個 flow version 的一次執行，可建立、查看、取消、重試 step、刪除 / 保留；保存 timeline、step outputs、cost、latency、provider calls、tool invocations |
-| **Evidence** | 支撐 claims 的來源、摘錄、confidence、conflict 與 claim-to-source mapping；主要 lifecycle 是 review、annotate、approve、reject |
-| **Artifact** | Flow 的正式輸出，例如 Markdown report、JSON evidence bundle、Slack draft、GitHub comment、PDF/PPT；支援版本、重新產生、核准、匯出 |
-| **Provider** | LLM、Search、Reader、Knowledge、Action providers 的 capability、credential 與 health 設定；可新增、停用、測試、輪替 credential |
-| **Policy** | 成本、權限、fallback、guardrails、verification、human approval 等可重用策略；可建立、編輯、套用、版本化 |
-| **Skill** | 可安裝、可版本化、可審計的能力包，供 flow steps 綁定與評估；可安裝、升級、停用、執行 eval |
+## Commands at a glance
 
-## 核心操作模型
+| Command | What it does | Entry point |
+| --- | --- | --- |
+| **Define** | Create/clone/edit flow drafts, validate, publish immutable versions | Web UI → Define / `POST /api/flows` |
+| **Configure** | Add/test/disable providers, version policies, install/eval skills, bind to steps | Web UI → Manage / `POST /api/providers`, `/api/policies`, `/api/skills` |
+| **Run** | Start a run from a specific flow version + preset with validated inputs | Web UI → Run / `POST /api/flows/:id/runs` |
+| **Observe** | Timeline, step detail, provider/tool calls, cost, latency, tokens, context snapshots | Web UI → Timeline, Observability / `GET /api/runs/:id/observability` |
+| **Control** | Cancel, resume, retry-step, approval gates for external writes | Web UI → Timeline actions / `POST /api/runs/:id/cancel\|retry-step` |
+| **Verify** | Review evidence, claims, citations, confidence, conflicts; approve/reject | Web UI → Evidence / `GET /api/runs/:id/evidence/:index` |
+| **Produce** | Generate Markdown reports, JSON evidence bundles; version, regenerate, export | Web UI → Artifacts / `GET /api/runs/:id/artifacts/:id` |
+| **Improve** | Create eval cases, skill proposals, policy suggestions, memory proposals from runs | Web UI → Improve / `GET /api/improvements` |
 
-產品驗收不應停在「有資料、有列表、有詳情」。每個核心能力都必須有使用者可觸發的 command，以及 command 後可追蹤的狀態變更：
+## Quick start
 
-| 操作 | 使用者要能做什麼 | 驗收重點 |
-|------|------------------|----------|
-| **Define** | 建立 / 複製 / 編輯 flow draft，設定 inputs、steps、tools、providers、policy、artifact schema，validate 後 publish 成 version | Flow 不只是 seed fixture；使用者能產生可執行 flow version |
-| **Configure** | 新增 / 測試 / 停用 provider，建立 / 版本化 policy，安裝 / 停用 / eval skill，並把它們綁到 flow steps | 設定會被 runtime 使用，不只是顯示 readiness |
-| **Run** | 從指定 flow version + preset 建立 run，填 inputs，開始執行 | Run 必須引用固定 flow version、preset、policy、provider binding |
-| **Observe** | 查看 timeline、step state、tool calls、provider calls、cost、latency、errors、context snapshot | 能重建執行路徑，不只是 final output |
-| **Control** | cancel、resume、retry step、approve gate、套用 fallback 或調整下一步策略 | 長任務不是黑盒，失敗時有操作入口 |
-| **Verify** | review evidence、claims、citations、policy violations、eval results，approve / reject evidence 或 artifact | 產出可審計，不盲信生成文字 |
-| **Produce** | 產生 artifact，支援 version、regenerate、approve、export | Artifact 是正式輸出，不是聊天回覆 |
-| **Improve** | 從失敗 run、feedback、eval result 產生 eval case、skill proposal、policy suggestion、memory proposal | 學習 loop 可審核，不自動污染 production behavior |
-
-## 系統分層
-
-```
-Web UI → Flow Definition → Skill System → Learning Loop
-→ Evaluation → Observability → Policy Engine → Context Management
-→ Memory System → Knowledge / RAG → Runtime Controls → AI Agent Harness
-→ MCP / Provider Router / A2A Adapter → Evidence / Audit Store → Artifact System
-```
-
-## 核心功能
-
-| 功能 | 說明 |
-|------|------|
-| **Define** | Flow library、create / clone flow、flow editor、validate、publish version |
-| **Configure** | Providers、policies、skills、tool permissions、runtime bindings |
-| **Run** | 從 flow version 選 preset、填 inputs、啟動 run、看 streaming progress |
-| **Observe / Control** | Timeline、step detail、context、cost、errors、cancel、resume、retry-step、approval gate |
-| **Verify** | Evidence、claims、citations、policy violations、eval results、approve / reject |
-| **Produce** | Markdown report、JSON evidence bundle、artifact version、regenerate、export |
-| **Improve** | Eval cases、skill proposals、policy suggestions、memory proposals |
-| **Flow Versioning** | 管理 draft / published / archived 狀態，讓每個 run 可追溯到固定 flow version |
-| **Skill System** | 可安裝、可版本化、可觸發、可審計的能力包 |
-| **Provider Router** | 統一管理 LLM、Search、Reader、Knowledge、Action providers |
-| **Policy Engine** | 成本、權限、fallback、guardrails、verification 配置 |
-| **Evidence Store** | 每個結論可追到來源與執行紀錄 |
-| **Observability** | 完整 trace、cost、latency、token、tool usage 追蹤 |
-| **Memory System** | Procedural、Episodic、Semantic 三層記憶管理 |
-| **Knowledge / RAG** | Document ingest、chunk embedding、retrieval；本機與 Cloudflare-native（Vectorize）provider |
-| **Evaluation / Learning** | Eval case 執行與從 failed run / feedback 產生可審核的 improvement proposals |
-| **External API / Access Control** | 對外 `/v1` API 讓其他服務觸發 run、取 artifacts/evidence；以 API key + scope + rate limit + token/cost budget + audit log 管控 |
-
-## MVP 範圍
-
-**第一版必須把 Define -> Configure -> Run -> Observe -> Control -> Verify -> Produce 做成可用主線。Deep Research 只是內建 seed flow，用來展示完整 runtime loop；它不能取代使用者定義與配置 flow 的能力。**
-
-### MVP 必做
-
-- Define：建立 / 複製 flow draft，編輯 metadata、input schema、steps、edges、presets、provider bindings、policy refs、artifact schemas，validate 後 publish
-- Configure：新增 / 測試 / 停用 provider；建立 / 版本化 / 套用 policy；安裝 / 停用 / eval skill；把設定綁到 flow steps
-- Run：從 flow detail / version 建立 run，而不是只從 hardcoded Deep Research form 建立
-- Observe：timeline、step detail、provider calls、tool usage、cost、latency、context snapshot、retry、error
-- Control：cancel、resume、retry-step、approval gate；失敗時能從 checkpoint 接續
-- Verify：每個主要 claim 可追到來源、摘錄與 confidence；可 approve / reject evidence 或 artifact
-- Produce：Markdown report、JSON evidence bundle 與 summary artifact 可 version、regenerate、export
-- Improve：從 failed run / feedback / eval result 產生 eval case、skill proposal、policy suggestion、memory proposal
-
-### 內建 Flows
-
-- Deep Research seed flow（含 Quick / Standard / Deep 三個 presets）
-
-### 內建 Skills
-
-定義在 `skills/`（每個含 `SKILL.md` 與 `skill.yaml`）：
-
-- `research-planner`
-- `source-ranker`
-- `citation-extractor`
-- `report-synthesizer`
-
-### 支援 Providers
-
-Provider catalog 定義在 `packages/runtime/src/provider-config.json`，並透過 provider/model routing 在 flow steps 上選擇 provider 與 model：
-
-- **LLM:** OpenAI、Anthropic、Gemini、OpenRouter、Groq、Cerebras、NVIDIA、Ollama、Ollama Cloud、Workers AI
-- **Search:** Tavily、Exa、Brave Search、Bing Search、SerpAPI、Jina Search
-- **Reader:** Jina Reader
-
-沒有設定任何 LLM / Search / Reader key 時，本機 server 會以 `fixtures/local-research-sources.json` 跑 deterministic offline run。
-
-## 設計原則
-
-- **Flow-first，不做空白 chatbot**
-- **Command surface 是 MVP，不是第二階段**：使用者必須能觸發 Define、Configure、Run、Observe、Control、Verify、Produce、Improve 的核心 commands；Deep Research 只是一個內建模板
-- **Local-first contributor experience**：`git clone`、`npm install`、`npm run dev` 後即可看到完整 Deep Research demo run，不需要先建立 Cloudflare 帳號或 resource
-- **Cloudflare-deployable production runtime**：Workers / D1 / KV / R2 / Vectorize / Queues / Workflows / Durable Objects / Workers AI 作為正式部署架構，Cloudflare 是 production preset / deploy target，不是唯一可執行 runtime
-- **React + Vite Web UI**：前端是 React SPA，使用 TanStack Query 管理 API-driven state、polling、retry 與 artifact loading；UI 以 Tailwind CSS v4 與 shadcn 風格元件（`apps/web/src/components/ui/*`）與 lucide-react icons 構成，build 後由 Workers Assets 或本機 server 提供
-- **UI-managed credentials**：provider API key 可直接在 Web UI 輸入並存到 D1 management config，runtime 先讀 config 再 fallback 到環境變數 / `.dev.vars`
-- **Framework-based i18n**：Web UI 使用 `i18next` / `react-i18next` / browser language detector，預設支援 `zh-Hant` 與 `en`
-- **Hono Worker API**：Cloudflare Worker API 以 Hono route table 管理，保留與本機 server 相同的 API contract
-- **Evidence-backed outputs**：每個主要 claim 都有 citation
-- **Policy as configuration**：成本、權限、provider、human approval 都是一級配置
-- **Durable execution**：長任務可恢復、可重試、可審計
-
-## 專案結構
-
-| 路徑 | 說明 |
-|------|------|
-| `apps/web` | React + Vite SPA，使用 TanStack Query、react-i18next、Tailwind CSS v4 與 shadcn 風格 UI 元件（`components/ui/*`）與 lucide-react icons |
-| `apps/worker` | Hono-based Cloudflare Worker API 與 Deep Research Workflow entrypoint |
-| `packages/core` | Flow definitions（`flow.ts`、`deep-research-flow.ts`）、runtime contracts、policy/provider 抽象 |
-| `packages/runtime` | 本機 runtime：flow runtime、provider catalog、provider/tool routing、policy & runtime controls、observability / evidence / artifacts、context & memory、skill packages |
-| `packages/evals` | Evaluation 與 learning loop（從 failed run / feedback / eval result 產生 proposals） |
-| `packages/knowledge` | Knowledge / RAG：document ingest、retrieval schema、LlamaIndex adapter 與 Cloudflare-native（Vectorize）provider |
-| `packages/local` | Local filesystem / in-memory adapters、`.dev.vars` 載入、local readiness report |
-| `packages/cloudflare` | D1 repository、KV、R2、Vectorize、Workers service map 等 Cloudflare adapters |
-| `packages/db` | D1 schema 與 migrations（flow runtime、skill packages、provider routing、policy controls、context/memory、observability/evidence/artifacts/evals、knowledge RAG、flow define commands、management config） |
-| `skills/` | 內建 skill packages 原始碼（`SKILL.md` + `skill.yaml`）：research-planner、source-ranker、citation-extractor、report-synthesizer |
-| `fixtures` | 本機 deterministic Deep Research demo data 與 flow 定義（`fixtures/flows`） |
-| `openspec/` | Spec-driven 開發文件（`specs/`、`changes/`），逐 capability 追蹤需求與變更 |
-| `scripts/` | Dev server 與各項 `npm run check` 背後的 TypeScript 腳本 |
-
-## Web UI 資訊架構
-
-Web UI（`apps/web/src/App.tsx`）的側邊導覽分成三個群組，對應 Define → Run → Observe → Control → Verify → Produce → Improve runtime loop：
-
-- **工作區 / Workspace**
-  - **執行 (Run)**：選 flow + preset、填 inputs、啟動 run、看 streaming progress
-  - **定義 (Define)**：建立 / 編輯 flow draft，新增 steps、artifacts、provider/model routing，驗證並 publish 版本
-- **執行監控 / Operations**
-  - **時間線 (Timeline)**：step state、tool calls、provider calls、cancel / retry-step
-  - **觀測 (Observability)**：cost、latency、tokens、tool usage、provider health
-  - **上下文 (Context)**：runtime context snapshot 與 memory
-- **驗證與管理 / Review**
-  - **證據 (Evidence)**：sources、claims、quotes、confidence、approve / reject / annotate
-  - **產物 (Artifacts)**：reports、bundles、version、regenerate、approve、export
-  - **API Clients**：發行 / 管理對外 API key（scope、可跑的 flow、rate limit、budget）、明碼一次性顯示、revoke、檢視 audit log 與用量
-  - **管理 (Manage)**：providers（含輸入 provider API key，存 D1 management config，runtime 先讀 config 再讀 env）、policies、skills 設定與 improvement proposals
-
-Empty states 必須指向下一個可執行動作，例如「Create flow」、「Clone Deep Research」、「Run selected flow」，避免只顯示內部狀態。
-
-## 文件
-
-- [`agent-gateway-plan.md`](./agent-gateway-plan.md) — 完整規劃文件，包含系統分層、資料模型、API shape、技術架構與風險分析
-- [`openspec/`](./openspec) — Spec-driven 開發文件，逐 capability 追蹤需求與變更（flow runtime、provider/tool routing、policy controls、context/memory、observability/evidence/artifacts、skill packages、evaluation/learning loop、web UI）
-
-## Cloudflare 架構
-
-第一版部署目標改為 Cloudflare 全家桶：
-
-| 層 | Cloudflare 服務 | 綁定 | 用途 |
-|----|-----------------|------|------|
-| Edge/API | Workers | `fetch` | API、policy check、provider routing、queue dispatch |
-| Web UI | Workers Assets | `ASSETS` | 同一個 edge app 服務管理介面 |
-| Relational store | D1 | `DB` | flows、runs、steps、policy、skills、evidence metadata、evals |
-| Object store | R2 | `ARTIFACTS` | 大型 artifacts、evidence bundle、report exports、step outputs |
-| Vector store | Vectorize | `VECTORIZE` | chunk embeddings、semantic memory、RAG retrieval |
-| Ephemeral/cache | KV | `CACHE` | session、provider health、idempotency key、run status cache |
-| Durable workflow | Workflows | `DEEP_RESEARCH_WORKFLOW` | Deep Research 多步驟執行、step retry、pause/resume |
-| Async work | Queues | `RUN_QUEUE` | eval、export、provider health、retry 等背景 jobs |
-| Run coordination | Durable Objects | `RUN_COORDINATOR` | 單一 run 的狀態協調、checkpoint fan-out、streaming 狀態 |
-| Model runtime | Workers AI | `AI` | policy 允許時使用 Cloudflare 原生模型 |
-
-`wrangler.toml` 是部署入口，`apps/worker/src/index.ts` 提供 Cloudflare Worker API，`apps/worker/src/workflow.ts` 定義 Deep Research Workflow，`packages/cloudflare/src/*` 放 Cloudflare adapter 與服務映射。專案 source code 以 TypeScript 為準，前端由 Vite build 成 Workers Assets。
-
-## 開發檢查
+Requirements: Node.js 22+, pnpm 10, Git. No Cloudflare account needed for local development.
 
 ```bash
-npm run check
-```
-
-目前檢查包含 core runtime、React web shell、Playwright Web UI smoke test、local API smoke test、Cloudflare binding / worker 架構檢查與 Worker runtime smoke test。local API smoke test 會用隔離的 `.tmp/local-api-check` 狀態目錄啟動本機 server，實際驗證 readiness、輸入錯誤、run completion、artifact download 與刪除流程；Web UI smoke test 會用隔離的 `.tmp/web-ui-check` 狀態目錄啟動本機 server，實際打開 React UI、切換語言、建立 run，並檢查 timeline、evidence、artifact download link。
-
-本機可用模式會先 build React Workers Assets 與 TypeScript，然後啟動一個本機 API server，用同一個 Web UI 跑 Deep Research run、timeline、evidence 與 artifact 檢視；這條路徑不需要先配置 Cloudflare resource ID：
-
-```bash
+git clone https://github.com/agent-platform/agent-platform.git
+cd agent-platform
+pnpm install
+cp .dev.vars.example .dev.vars   # optional: add provider keys
 npm run dev
 ```
 
-啟動後開啟 `http://127.0.0.1:8787`。
+Agent Platform starts a local API server + Web UI at **http://127.0.0.1:8787**.
 
-本機 run history 會持久化到 `.local/agent-platform-runs.json`，重啟 dev server 後仍可在 Recent Runs 打開舊 run 與下載 artifacts；`.local/` 已被 git ignore。
+- Without provider keys: runs use `fixtures/local-research-sources.json` for deterministic offline Deep Research (full evidence, artifacts, trace).
+- With keys: configure in Web UI → Manage → Providers (stored in D1) or `.dev.vars`.
 
-如果要用另一個狀態目錄啟動本機 server，可設定 `LOCAL_STATE_DIR=/path/to/state npm run dev`。自動化檢查會使用這個能力避免污染互動開發資料。
+### Run your first Deep Research
 
-沒有 provider key 時，本機 server 會使用 `fixtures/local-research-sources.json` 產生 deterministic offline research：完成的 run 會包含多筆 evidence、source title / URL、Markdown findings、sources section，以及 JSON evidence bundle。這能驗證產品流程與 artifact contract；真正的 live search / reader / LLM 呼叫仍需要在 readiness 中配置對應 provider key。
+1. Open http://127.0.0.1:8787
+2. Click **Run** → Select **Deep Research** → Choose preset (Quick/Standard/Deep)
+3. Enter a topic, click **Start run**
+4. Watch streaming timeline → Open **Evidence** / **Artifacts** when complete
 
-本機 provider key 可放在 `.dev.vars`，格式可參考 `.dev.vars.example`。`npm run dev` 會載入 `.dev.vars` 中尚未由 shell 設定的變數，`GET /api/readiness` 只顯示已載入的 key 名稱，不回傳 secret value。自動化檢查可用 `DEV_VARS_PATH=/path/to/.dev.vars` 指向隔離的設定檔。
+## Architecture
 
-本機 server 與 Cloudflare Worker 應收斂到同一組 command-driven Web UI API contract。已實作項目可先保留相容入口，但產品主線應以 Define / Configure / Run / Observe / Control / Verify / Produce / Improve commands 為準：
+```text
+Web UI → Flow Definition → Skill System → Learning Loop
+       → Evaluation → Observability → Policy Engine → Context Management
+       → Memory System → Knowledge/RAG → Runtime Controls → AI Agent Harness
+       → MCP / Provider Router / A2A Adapter → Evidence/Audit Store → Artifact System
+```
 
-**Flow / Run**
+| Layer | Responsibility |
+|-------|----------------|
+| **Web UI** | React + Vite + TanStack Query + i18n (zh-Hant/en), command surfaces for all 8 operations |
+| **Flow Runtime** | Versioned flows, step DAG, checkpoints, resume/retry-step, presets |
+| **Skill System** | Versioned packages (skill.yaml + SKILL.md), explicit step bindings, invocation tracking |
+| **Provider Router** | Groundlane MCP server for `web_search`, `web_fetch`, `web_extract`; 12 search adapters, RRF fusion, budgets |
+| **Policy Engine** | Budget, allow/deny, guards (input/tool/output), loop protection, human approval gates, escalation |
+| **Context/Memory** | Typed context blocks, budget allocation, compression, procedural/episodic/semantic memory, reviewable writes |
+| **Observability** | Structured traces, derived metrics, evidence store (claims↔sources), artifact versioning |
+| **Evaluation** | Eval suites/cases, quality gates (blocks skill promotion), learning signals → reviewable proposals |
+| **External API** | `/v1` Bearer auth, scoped API keys, rate limits, cost budgets, audit log |
 
-- `GET /api/flows` 列出 flows
-- `POST /api/flows` 建立 flow draft
-- `GET /api/flows/:flowId` 查看 flow definition、versions、presets 與最近 runs
-- `PATCH /api/flows/:flowId` 更新 flow draft metadata、schema、steps、edges、presets、bindings
-- `DELETE /api/flows/:flowId` 刪除尚未執行的 draft，或封存已有 runs 的 flow
-- `POST /api/flows/:flowId/clone` 複製 flow
-- `GET /api/flows/:flowId/versions` 列出 / 管理 flow versions
-- `POST /api/flows/:flowId/runs` 從 flow 建立 run
-- `POST /api/runs` 建立 run（相容舊入口；應逐步收斂到 `POST /api/flows/:flowId/runs`）
-- `GET /api/runs/:runId` 查看 run timeline、step detail、evidence、artifacts
-- `DELETE /api/runs/:runId` 刪除單一 run；`DELETE /api/runs` 清空 run history
-- `POST /api/runs/:runId/cancel`、`POST /api/runs/:runId/retry-step`
+## Providers
 
-**Observe / Verify / Produce**
+Provider catalog in `packages/runtime/src/provider-config.json`. Search/Reader/Browser via **Groundlane MCP server** (separate deployment or local).
 
-- `GET /api/runs/:runId/observability` 查看 cost、latency、token、tool / provider calls
-- `GET /api/runs/:runId/evidence/:evidenceIndex`、evidence approve / reject / annotate
-- `GET /api/runs/:runId/artifacts/:artifactId` 下載 artifact；`/versions`、`/diff` 看版本與差異
-- `POST /api/runs/:runId/artifacts/regenerate` 重新產生 artifact
+| Capability | Providers (adapters implemented) |
+| --- | --- |
+| **LLM** | OpenAI, Anthropic, Gemini, OpenRouter, Groq, Cerebras, NVIDIA, Ollama, Ollama Cloud, Workers AI |
+| **Search** | Tavily, Exa, Parallel, Browserbase, Brave, Firecrawl, SerpAPI, Linkup, Serper, You.com, Bing, Jina Search |
+| **Reader** | Jina Reader, Mozilla Readability (local fallback) |
+| **Browser** | Local Playwright, Browserless (opt-in) |
+| **Knowledge/RAG** | Cloudflare Vectorize (native), LlamaIndex (adapter) |
+| **Vector Store** | Vectorize (Cloudflare-native) |
 
-**Configure / Improve**
+**Search layer features (via Groundlane):**
+- Strategies: `balanced` (2-provider RRF fusion), `deep` (multi-provider fusion), `fallback`
+- Canonical URL deduplication, per-host limits, tracking parameter stripping
+- Monthly attempt budgets per provider, health-aware routing
 
-- `GET/POST /api/providers`、`GET/PATCH /api/providers/:providerId`、`.../credential`、`.../test`、`.../models/sync`、`.../models/test`
-- `GET/POST /api/policies`、`/api/policies/:policyId`、`.../apply`、`.../versions`
-- `GET/POST /api/skills`、`/api/skills/:skillId`、`.../evals`
-- `GET /api/improvements` 列出 eval case / skill / policy / memory proposals
-- `GET/POST /api/config` management config（含 UI 輸入的 provider API key）
-- `GET /api/readiness` 查看本機持久化、Cloudflare resource placeholder 與 provider key 配置狀態；`GET /api/health` 健康檢查
+## Deploy to Cloudflare
 
-**External API 管理（admin）**
-
-- `GET/POST /api/api-clients` 列出 / 發行對外 API client（POST 回傳明碼一次）
-- `PATCH /api/api-clients/:id` 更新 name / scopes / allowed_flows / rate_limit / budget
-- `POST /api/api-clients/:id/revoke` 失效
-- `GET /api/api-clients/:id/audit` 查 audit log 與當期用量
-
-本機 server（`scripts/local-dev-server.ts`）與 Cloudflare Worker（`apps/worker/src/index.ts`）共用同一組 command surface，使同一個 `apps/web` build 可在兩種後端間切換而不需替換前端。
-
-## 對外 API（`/v1`，Bearer 認證）
-
-`/v1` 是給其他服務程式化使用的公開 API，與內部 admin `/api` 分離，需 `Authorization: Bearer ak_live_<key>`。每把 key 由 admin 在「API Clients」發行，可設定 scope、可跑的 flow、rate limit 與 token/cost budget；所有呼叫寫入 audit log。
-
-| Method + Path | Scope | 說明 |
-|---------------|-------|------|
-| `POST /v1/runs` | `runs:write` | `{flowId, presetId, inputs}` 建 run（flow 須在 key 白名單內） |
-| `GET /v1/runs/:id` | `runs:read` | run 狀態 / timeline（只有建立它的 client 能讀） |
-| `GET /v1/runs/:id/artifacts[/:artifactId]` | `artifacts:read` | artifact 清單 / 下載 |
-| `GET /v1/runs/:id/evidence` | `evidence:read` | evidence 清單 |
-| `GET /v1/flows` | `flows:read` | 此 key 可執行的 flow（discovery） |
-
-管控訊號：`401`（無效 / revoke）、`403`（scope / flow 不允許）、`429`（+ `Retry-After`、`X-RateLimit-*`）、`402`（`budget_exceeded`，僅擋建立 run，唯讀請求豁免）。
-
-消費端範例（base URL 本機 `http://127.0.0.1:8787`，部署後 `https://<worker-url>`）：
+Production topology: **Cloudflare Workers + Workers Assets + D1 + KV + R2 + Vectorize + Queues + Workflows + Durable Objects + Workers AI**.
 
 ```bash
+# 1. Authenticate
+pnpm exec wrangler login
+pnpm exec wrangler whoami
+
+# 2. Create resources (run once)
+pnpm exec wrangler d1 create agent-platform
+pnpm exec wrangler kv namespace create CACHE
+pnpm exec wrangler r2 bucket create agent-platform-artifacts
+pnpm exec wrangler vectorize create agent-platform-knowledge --dimensions=1536 --metric=cosine
+pnpm exec wrangler queues create agent-platform-runs
+# Note: Workflows & Durable Objects created on first deploy
+
+# 3. Update wrangler.toml with returned IDs (database_id, kv id, etc.)
+
+# 4. Set secrets (provider keys, auth tokens)
+pnpm exec wrangler secret put OPENAI_API_KEY
+pnpm exec wrangler secret put ANTHROPIC_API_KEY
+# ... other provider keys
+pnpm exec wrangler secret put AUTH_SECRET   # for API key signing
+
+# 5. Deploy
+npm run build:web
+pnpm exec wrangler d1 migrations apply agent-platform --remote
+pnpm exec wrangler deploy
+```
+
+**Verify:**
+```bash
+curl https://<your-worker>.workers.dev/api/health
+curl https://<your-worker>.workers.dev/api/readiness
+```
+
+CI/CD: Pushes to `main` auto-deploy after `npm run check` passes (requires `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` GitHub secrets).
+
+## External API (`/v1`)
+
+Programmatic access for other services. Separate from admin `/api`.
+
+```bash
+# Issue an API key in Web UI → API Clients (scope, allowed flows, rate limit, budget)
+export KEY="ak_live_..."
+
+# Create a run
 curl -X POST $BASE/v1/runs -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
-  -d '{"flowId":"deep_research","presetId":"standard","inputs":{"topic":"...","audience":"...","freshnessDays":365}}'
-curl $BASE/v1/runs/$RUN_ID -H "Authorization: Bearer $KEY"            # 輪詢直到 complete
+  -d '{"flowId":"deep_research","presetId":"standard","inputs":{"topic":"agent memory systems","audience":"engineers","freshnessDays":365}}'
+
+# Poll until complete
+curl $BASE/v1/runs/$RUN_ID -H "Authorization: Bearer $KEY"
+
+# Download artifact
 curl $BASE/v1/runs/$RUN_ID/artifacts/markdown_report -H "Authorization: Bearer $KEY"
 ```
 
-gateway 核心在 `packages/runtime/src/api-gateway.ts`（純邏輯 + `ApiGatewayStore` 注入），worker 用 D1 + KV、local 用 JSON + in-memory；資料表見 `packages/db/migrations/0010_api_gateway.sql`。`scripts/check-public-api.ts` 涵蓋完整管控流程並接入 `npm run check`。
+| Method + Path | Scope | Description |
+|---------------|-------|-------------|
+| `POST /v1/runs` | `runs:write` | Create run (flow must be in key's allowlist) |
+| `GET /v1/runs/:id` | `runs:read` | Run status/timeline (only creator can read) |
+| `GET /v1/runs/:id/artifacts[/:artifactId]` | `artifacts:read` | Artifact list/download |
+| `GET /v1/runs/:id/evidence` | `evidence:read` | Evidence list |
+| `GET /v1/flows` | `flows:read` | Discover flows allowed by key |
 
-Cloudflare Worker 也維持同一組 Web UI API contract：command surface、`/api/readiness`、run list/create/detail、delete/clear、cancel、retry-step，以及 R2 artifact download。Worker Workflow 會輸出 Markdown report、JSON evidence bundle、summary JSON 三個 R2 artifacts，並把 flow / version / running / complete 狀態與 workflow events 寫回 D1。這讓同一個 `apps/web` build 在本機 server 與 Cloudflare Worker 後端之間切換時，不需要替換前端程式。
+Errors: `401` invalid/revoked, `403` scope/flow not allowed, `429` rate limited (`Retry-After`, `X-RateLimit-*`), `402` budget exceeded (blocks run creation only).
 
-前端 Workers Assets build：
+## Run modes
 
-```bash
-npm run build:web
-```
+| Mode | Best for | Entry point |
+|------|----------|-------------|
+| Local Node | Development, evaluation, offline demo | `npm run dev` |
+| Cloudflare Worker | Production, team sharing | [Deploy](#deploy-to-cloudflare) |
 
-Web UI i18n 由 `apps/web/src/i18n.ts` 管理，預設語系為繁體中文，並支援英文。新增語系時應沿用 i18next resource structure，避免在 React components 中硬編文案。
+## Project status
 
-Cloudflare deploy readiness 檢查：
+- Current version: `0.1.0` early preview; no stable API guarantee yet.
+- Implemented: 8 command surfaces, flow versioning, 4 built-in skills, 10 LLM + 12 search + 2 reader + 2 browser providers, Groundlane MCP integration, policy guards, evidence/artifact versioning, eval/quality gates, learning loop, external `/v1` API, full Cloudflare deployment.
+- Next: Visual flow editor, more built-in flows/skills, multi-tenancy (Org/Project), streaming artifacts, A2A handoff.
 
-```bash
-npm run cloudflare:readiness
-```
+## Documentation
 
-這個命令會讀取 `wrangler.toml`、檢查 Workers Assets build、D1 / KV resource IDs、D1 migrations、R2、Vectorize、Queue、Workflow 設定，並列出缺少 resource 時要執行的 `wrangler` setup commands。當 `wrangler.toml` 還有 placeholder resource IDs 時，這個命令會回傳非 0；完成 resource setup 後，`npm run check` 會要求 Cloudflare deploy readiness 通過。
+- [`agent-gateway-plan.md`](./agent-gateway-plan.md) — Full product & architecture specification
+- [`openspec/specs/`](./openspec/specs/) — 7 capability specs (flow-runtime, skill-packages, provider-tool-routing, policy-runtime-controls, observability-evidence-artifacts, context-memory-management, evaluation-learning-loop)
+- [`openspec/changes/`](./openspec/changes/) — Spec-driven change history
 
-`npm run check` 也會執行 `wrangler deploy --dry-run`，確認 Worker、Workflow、Durable Object class、Workers Assets 與 bindings 可以被 Wrangler 成功 bundle，但不會上傳部署。
+## Contributing
 
-`npm run check:worker-runtime` 會在隔離的 `.tmp/worker-runtime-check` 狀態目錄套用本機 D1 migrations、啟動 `wrangler dev --local`，並實際驗證 Worker `/api/readiness`、輸入錯誤、run create / complete、R2 artifact download、retry、cancel、delete。這是本機 Cloudflare runtime smoke test，不會使用遠端 Cloudflare resource。
+Use GitHub Issues for bugs and feature proposals. Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a PR.
 
-完成 Cloudflare resource 建立後，部署順序是：
+## License
 
-```bash
-npm run cloudflare:setup:plan
-npm run cloudflare:setup:apply -- --yes
-npm run cloudflare:readiness
-npm run build:web
-npx wrangler deploy --dry-run
-npx wrangler d1 migrations apply agent-platform --remote
-npx wrangler deploy
-npm run cloudflare:smoke:remote -- --url https://<worker-url>
-npm run cloudflare:smoke:remote -- --url https://<worker-url> --create-run --yes
-```
-
-`cloudflare:setup:plan` 只列出遠端 setup/deploy plan，不會碰 Cloudflare。輸出會區分 blocking setup commands（D1 / KV placeholder 必須先解決）與 provisioning commands（R2 / Vectorize / Queue 這類以名稱綁定的資源建立）。`cloudflare:setup:apply -- --yes` 才會執行 setup/provisioning；`cloudflare:deploy:remote -- --yes` 會在 blocking setup 清空後執行 build、dry-run、remote migrations、deploy。
-
-如果要把部署與 smoke test 合併成一條命令：
-
-```bash
-npm run cloudflare:deploy:remote -- --yes --smoke-url https://<worker-url>
-npm run cloudflare:deploy:remote -- --yes --smoke-url https://<worker-url> --smoke-create-run
-```
-
-部署後可用 `cloudflare:smoke:remote` 驗證遠端 Worker。預設是 read-only smoke test，只檢查 `/api/health`、`/api/readiness`、`/api/flows`；加上 `--create-run --yes` 才會建立一筆 Deep Research run、等待 complete、下載 Markdown report / evidence bundle / summary JSON artifacts，最後刪除該 run。也可以用 `AGENT_PLATFORM_URL=https://<worker-url>` 取代 `--url`。
-
-## 狀態
-
-**Status:** Draft  
-**Date:** 2026-06-02
+Agent Platform is licensed under the [Apache License 2.0](LICENSE).
