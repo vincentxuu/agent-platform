@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:is(.dark *));
+
 @theme {
   --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 
@@ -48,101 +50,12 @@
 }
 
 @layer components {
-  .shell {
-    @apply grid min-h-screen min-w-0 grid-cols-[284px_minmax(0,1fr)] max-lg:grid-cols-1;
-  }
-
   .skip-link {
     @apply fixed left-2.5 top-2.5 z-20 -translate-y-40 rounded-md bg-slate-950 px-3 py-2 text-sm text-white transition-transform focus:translate-y-0;
   }
 
-  .sidebar {
-    @apply sticky top-0 h-screen min-w-0 overflow-auto border-r bg-card max-lg:static max-lg:h-auto max-lg:border-b max-lg:border-r-0;
-  }
-
-  .sidebar-inner {
-    @apply grid min-h-full min-w-0 overflow-hidden grid-rows-[auto_auto_1fr_auto] gap-4 p-3.5 max-lg:min-h-0 max-lg:gap-3 max-lg:p-3;
-  }
-
-  .brand-block {
-    @apply grid grid-cols-[42px_minmax(0,1fr)] items-center gap-2.5 px-1.5 pb-2.5 pt-1.5 max-lg:pb-0.5;
-  }
-
-  .brand-mark {
-    @apply grid h-[42px] w-[42px] place-items-center rounded-lg bg-primary text-xs font-extrabold tracking-normal text-primary-foreground;
-  }
-
-  .sidebar-primary-action {
-    @apply grid gap-1 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900 no-underline transition-colors hover:border-blue-400 hover:bg-blue-100 max-lg:grid-cols-[minmax(0,1fr)_auto] max-lg:items-center;
-  }
-
-  .sidebar-primary-action span {
-    @apply font-semibold;
-  }
-
-  .sidebar-primary-action strong {
-    @apply text-xs text-blue-700;
-  }
-
-  .sidebar-nav {
-    @apply grid min-w-0 max-w-full gap-4 max-lg:flex max-lg:gap-2 max-lg:overflow-x-auto max-lg:pb-1;
-  }
-
-  .nav-group {
-    @apply grid gap-1 max-lg:contents;
-  }
-
-  .nav-group-label {
-    @apply m-0 px-2 text-[11px] font-extrabold uppercase text-muted-foreground max-lg:hidden;
-  }
-
-  .sidebar-nav a {
-    @apply grid min-h-[52px] grid-cols-[30px_minmax(0,1fr)] items-center gap-2 rounded-lg border border-transparent p-2 text-sm text-slate-700 no-underline transition-colors hover:border-border hover:bg-muted max-lg:min-h-11 max-lg:min-w-32 max-lg:grid-cols-[auto_minmax(0,1fr)];
-  }
-
-  .sidebar-nav a.active {
-    @apply border-emerald-200 bg-emerald-50 text-emerald-900 shadow-[inset_3px_0_0_#10b981];
-  }
-
-  .nav-badge {
-    @apply grid h-[30px] w-[30px] place-items-center rounded-lg bg-secondary text-[11px] font-extrabold text-muted-foreground max-lg:h-[26px] max-lg:w-[26px];
-  }
-
-  .sidebar-nav a.active .nav-badge {
-    @apply bg-emerald-100 text-emerald-700;
-  }
-
-  .sidebar-nav strong,
-  .sidebar-nav small {
-    @apply block;
-  }
-
-  .sidebar-nav small {
-    @apply mt-0.5 text-xs leading-snug text-muted-foreground max-lg:hidden;
-  }
-
-  .sidebar-footer {
-    @apply grid gap-2.5 border-t pt-3 max-lg:hidden;
-  }
-
-  .runtime-pill {
-    @apply flex items-center justify-between gap-2 rounded-lg border bg-slate-50 px-2.5 py-2 text-xs;
-  }
-
-  .runtime-pill span {
-    @apply text-muted-foreground;
-  }
-
-  .runtime-pill strong {
-    @apply text-primary;
-  }
-
-  .language-switcher {
-    @apply grid gap-1.5 text-xs text-muted-foreground;
-  }
-
   .workspace {
-    @apply grid min-w-0 content-start gap-4 p-6 max-lg:p-3.5;
+    @apply grid min-w-0 flex-1 content-start gap-4 p-6 max-lg:p-3.5;
   }
 
   .panel {
@@ -719,4 +632,37 @@
   :root {
     --agent-platform-responsive-layout: 1;
   }
+}
+
+:root {
+  --sidebar: hsl(0 0% 98%);
+  --sidebar-foreground: hsl(240 5.3% 26.1%);
+  --sidebar-primary: hsl(240 5.9% 10%);
+  --sidebar-primary-foreground: hsl(0 0% 98%);
+  --sidebar-accent: hsl(240 4.8% 95.9%);
+  --sidebar-accent-foreground: hsl(240 5.9% 10%);
+  --sidebar-border: hsl(220 13% 91%);
+  --sidebar-ring: hsl(217.2 91.2% 59.8%);
+}
+
+.dark {
+  --sidebar: hsl(240 5.9% 10%);
+  --sidebar-foreground: hsl(240 4.8% 95.9%);
+  --sidebar-primary: hsl(224.3 76.3% 48%);
+  --sidebar-primary-foreground: hsl(0 0% 100%);
+  --sidebar-accent: hsl(240 3.7% 15.9%);
+  --sidebar-accent-foreground: hsl(240 4.8% 95.9%);
+  --sidebar-border: hsl(240 3.7% 15.9%);
+  --sidebar-ring: hsl(217.2 91.2% 59.8%);
+}
+
+@theme inline {
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
 }

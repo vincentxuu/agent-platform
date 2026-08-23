@@ -2,12 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { BookOpen, Boxes, CheckCircle2, CirclePlay, FileOutput, FileText, Gauge, History, KeyRound, Layers3, Plus, Search, Settings2, ShieldCheck, Sparkles } from "lucide-react";
+import { AppSidebar, type NavGroup } from "./components/app-sidebar";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
 import { Input } from "./components/ui/input";
 import { Label } from "./components/ui/label";
 import { Select } from "./components/ui/native-select";
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "./components/ui/sidebar";
 import { Textarea } from "./components/ui/textarea";
 import { cn } from "./lib/utils";
 
@@ -172,7 +174,7 @@ const providerRoleOptions = [
   { value: "__custom__", labelKey: "customOption" }
 ] as const;
 
-const navGroups = [
+const navGroups: readonly NavGroup[] = [
   {
     key: "workspace",
     items: [
@@ -197,7 +199,7 @@ const navGroups = [
       { id: "manage", key: "manage", badge: "09", icon: Settings2 }
     ]
   }
-] as const;
+];
 
 export function App() {
   const { t, i18n } = useTranslation();
@@ -300,61 +302,23 @@ export function App() {
   }), [activeConfig, health.data, readiness.data]);
 
   return (
-    <main className="shell">
-      <a className="skip-link" href="#run">{t("nav.skipToContent")}</a>
-      <aside className="sidebar">
-        <div className="sidebar-inner">
-          <div className="brand-block">
-            <div className="brand-mark" aria-hidden="true">AP</div>
-            <div>
-              <h1 className="m-0 text-[17px] font-semibold leading-tight">Agent Platform</h1>
-              <p className="m-0 mt-0.5 text-xs text-muted-foreground">{t("nav.console")}</p>
-            </div>
-          </div>
-          <a className="sidebar-primary-action" href="#run">
-            <span>{t("nav.startRun")}</span>
-            <strong>{activeRun?.status ? t(`statuses.${activeRun.status}`, activeRun.status) : t("statuses.idle")}</strong>
-          </a>
-          <nav className="sidebar-nav" aria-label={t("nav.primary")}>
-            {navGroups.map((group) => (
-              <div className="nav-group" key={group.key}>
-                <p className="nav-group-label">{t(`nav.groups.${group.key}`)}</p>
-                {group.items.map((item) => (
-                  <a
-                    key={item.id}
-                    href={`#${item.id}`}
-                    className={activeSection === item.id ? "active" : ""}
-                    aria-current={activeSection === item.id ? "page" : undefined}
-                  >
-                    <span className="nav-badge" aria-hidden="true">
-                      <item.icon size={15} strokeWidth={2.2} />
-                    </span>
-                    <span>
-                      <strong>{t(`nav.${item.key}`)}</strong>
-                      <small>{item.badge} · {t(`nav.descriptions.${item.key}`)}</small>
-                    </span>
-                  </a>
-                ))}
-              </div>
-            ))}
-        </nav>
-          <div className="sidebar-footer">
-            <div className="runtime-pill">
-              <span>{t("nav.runtime")}</span>
-              <strong>{runtimeLabel(health.data?.runtime, t)}</strong>
-            </div>
-            <Label className="language-switcher">
-              <span>{t("language.label")}</span>
-              <Select value={i18n.resolvedLanguage || i18n.language} onChange={(event) => void i18n.changeLanguage(event.target.value)}>
-                <option value="zh-Hant">{t("language.zhHant")}</option>
-                <option value="en">{t("language.en")}</option>
-              </Select>
-            </Label>
-          </div>
-        </div>
-      </aside>
+    <SidebarProvider>
+      <a className="skip-link" href="#main-content">{t("nav.skipToContent")}</a>
+      <AppSidebar
+        groups={navGroups}
+        activeId={activeSection}
+        onSelect={setActiveSection}
+        primaryActionLabel={t("nav.startRun")}
+        primaryActionStatus={activeRun?.status ? t(`statuses.${activeRun.status}`, activeRun.status) : t("statuses.idle")}
+        runtimeLabel={runtimeLabel(health.data?.runtime, t)}
+      />
 
-      <section className="workspace" id="main-content">
+      <SidebarInset>
+        <header className="sticky top-0 z-10 flex h-12 items-center gap-2 border-b bg-background px-3 md:hidden">
+          <SidebarTrigger className="-ml-1" />
+          <span className="text-sm font-semibold">Agent Platform</span>
+        </header>
+        <main className="workspace" id="main-content">
         {activeSection === "run" ? <section id="run" className="panel">
           <div className="panel-heading">
             <div>
@@ -472,8 +436,9 @@ export function App() {
           <h2 className="mb-3 text-xl font-semibold tracking-normal">{t("manage.title")}</h2>
           <Management config={activeConfig} readiness={readiness.data} skills={skills.data} />
         </section> : null}
-      </section>
-    </main>
+        </main>
+      </SidebarInset>
+    </SidebarProvider>
   );
 }
 
