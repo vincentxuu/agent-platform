@@ -77,6 +77,22 @@ Web UI → Flow Definition → Skill System → Learning Loop
 | **Evaluation** | Eval suites/cases, quality gates (blocks skill promotion), learning signals → reviewable proposals |
 | **External API** | `/v1` Bearer auth, scoped API keys, rate limits, cost budgets, audit log |
 
+## Why Agent Platform?
+
+- **Flow-first, not a blank chatbot:** Define controlled workflows first, then add autonomy incrementally.
+- **Command surface is MVP:** All 8 core commands (Define→Improve) are invocable from day one, not bolted on later.
+- **Local-first developer experience:** `git clone && pnpm install && npm run dev` runs the full demo — no cloud resources required.
+- **Cloudflare production-grade runtime:** Workers/D1/KV/R2/Vectorize/Queues/Workflows/DO/Workers AI as a complete deployment stack.
+- **Evidence-backed outputs:** Every major claim has a citation you can trace.
+- **Policy as configuration:** Cost, permissions, providers, human approval are first-class config, not hardcoded logic.
+- **Durable execution:** Long-running tasks are recoverable, retryable, and auditable.
+
+## Security and limitations
+
+Web retrieval carries SSRF risk. Agent Platform treats user URLs, redirects, provider-returned URLs, browser subresources, WebSockets, and DNS answers as untrusted. **Keep authentication enabled, preserve default limits, and apply an outbound network policy in production.**
+
+Agent Platform does **not** guarantee CAPTCHA solving, invisible automation, or access to content the operator is not authorized to retrieve. Rendering JavaScript is not proof of anti-bot bypass.
+
 ## Providers
 
 Provider catalog in `packages/runtime/src/provider-config.json`. Search/Reader/Browser via **Groundlane MCP server** (separate deployment or local).
