@@ -68,112 +68,11 @@ open https://<your-worker>.workers.dev
 
 ### 2. External API (`/v1`) — For Services
 
-Programmatic access for other services (separate from admin `/api`):
-
-```bash
-# Issue API key in Web UI → API Clients (scope, allowed flows, rate limit, budget)
-export KEY="ak_live_..."
-
-# Create a run
-curl -X POST $BASE/v1/runs -H "Authorization: Bearer $KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"flowId":"deep_research","presetId":"standard","inputs":{"topic":"...","audience":"...","freshnessDays":365}}'
-
-# Poll until complete
-curl $BASE/v1/runs/$RUN_ID -H "Authorization: Bearer $KEY"
-
-# Download artifacts
-curl $BASE/v1/runs/$RUN_ID/artifacts/markdown_report -H "Authorization: Bearer $KEY"
-```
-
-| Method + Path | Scope | Description |
-|---------------|-------|-------------|
-| `POST /v1/runs` | `runs:write` | Create run (flow must be in key's allowlist) |
-| `GET /v1/runs/:id` | `runs:read` | Run status/timeline (only creator can read) |
-| `GET /v1/runs/:id/artifacts[/:artifactId]` | `artifacts:read` | Artifact list/download |
-| `GET /v1/runs/:id/evidence` | `evidence:read` | Evidence list |
-| `GET /v1/flows` | `flows:read` | Discover flows allowed by key |
+See [External API (`/v1`)](#external-api-v1) for full reference (auth, cURL examples, endpoint table, error codes).
 
 ### 3. OpenAI-Compatible Proxy API (`/v1`) — For Direct Model Access
 
-Standard OpenAI-compatible endpoints for direct LLM access via the platform's routing, fallback, budgets, and observability:
-
-```bash
-# Authentication (same API key system, needs `proxy:write` scope)
-export PROXY_KEY="ak_live_..."
-BASE="https://<your-worker>.workers.dev/v1"
-```
-
-**Endpoints:**
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/v1/models` | List available models (all providers) |
-| `POST` | `/v1/chat/completions` | Chat completions (streaming + non-streaming) |
-
-**List models:**
-```bash
-curl $BASE/v1/models -H "Authorization: Bearer $PROXY_KEY"
-```
-
-**Chat completion (non-streaming):**
-```bash
-curl -X POST $BASE/v1/chat/completions -H "Authorization: Bearer $PROXY_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "llama-3.3-70b-versatile",
-    "messages": [{"role": "user", "content": "Explain quantum computing in one paragraph"}],
-    "temperature": 0.7,
-    "max_tokens": 200
-  }'
-```
-
-**Chat completion (streaming):**
-```bash
-curl -X POST $BASE/v1/chat/completions -H "Authorization: Bearer $PROXY_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "llama-3.3-70b-versatile",
-    "messages": [{"role": "user", "content": "Write a haiku about clouds"}],
-    "stream": true
-  }'
-```
-
-**OpenAI SDK (Python):**
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="https://<your-worker>.workers.dev/v1",
-    api_key="ak_live_..."
-)
-
-# Non-streaming
-response = client.chat.completions.create(
-    model="llama-3.3-70b-versatile",
-    messages=[{"role": "user", "content": "Hello!"}]
-)
-print(response.choices[0].message.content)
-
-# Streaming
-stream = client.chat.completions.create(
-    model="gemini-2.0-flash",
-    messages=[{"role": "user", "content": "Count to 10"}],
-    stream=True
-)
-for chunk in stream:
-    if chunk.choices[0].delta.content:
-        print(chunk.choices[0].delta.content, end="", flush=True)
-```
-
-**Model routing & fallback** (automatic):
-| Model | Primary | Fallback |
-|-------|---------|----------|
-| `llama-3.3-70b-versatile` | Groq | OpenRouter |
-| `gemini-2.0-flash` | Google | OpenRouter |
-| `nemotron-3-ultra` | NVIDIA, Ollama Cloud | OpenRouter (free) |
-| `gpt-oss-120b` | Groq, NVIDIA, Ollama Cloud | OpenRouter (free) |
-
-Free models (verified): `nemotron-3-ultra`, `gpt-oss-120b`, `gpt-oss-20b`, `glm-5.2`, `hy3`, `deepseek-v4-flash`
+See [OpenAI-Compatible Proxy API (`/v1`)](#openai-compatible-proxy-api-v1) for full reference (auth, list models, chat completion streaming + non-streaming, OpenAI SDK usage, model routing + fallback table, model mapping config, policy controls, error codes).
 
 ### 4. Local Development
 
@@ -191,36 +90,7 @@ npm run dev
 
 ### 5. Production Deployment
 
-```bash
-# 1. Authenticate
-wrangler login
-
-# 2. Create resources (once)
-wrangler d1 create agent-platform
-wrangler kv namespace create CACHE
-wrangler r2 bucket create agent-platform-artifacts
-wrangler vectorize create agent-platform-knowledge --dimensions=1536 --metric=cosine
-wrangler queues create agent-platform-runs
-
-# 3. Update wrangler.toml with returned IDs
-
-# 4. Set secrets (provider keys)
-wrangler secret put OPENAI_API_KEY
-wrangler secret put ANTHROPIC_API_KEY
-# ... other keys
-wrangler secret put AUTH_SECRET
-
-# 5. Deploy
-npm run build:web
-wrangler d1 migrations apply agent-platform --remote
-wrangler deploy
-```
-
-**Verify:**
-```bash
-curl https://<your-worker>.workers.dev/api/health
-curl https://<your-worker>.workers.dev/api/readiness
-```
+See [Deploy to Cloudflare](#deploy-to-cloudflare) for full reference (wrangler auth + resource provisioning + secret setup + deploy + CI/CD).
 
 ## Quick start
 
