@@ -31,6 +31,10 @@ export async function fetchProviderModelIds(providerId, resolveSecret = (_secret
     return fetchOpenRouterModels(resolveSecret("OPENROUTER_API_KEY", provider));
   }
 
+  if (provider === "opencode-zen") {
+    return fetchOpenAiLikeModels("https://opencode.ai/zen/v1/models", resolveSecret("OPENCODE_ZEN_API_KEY", provider), provider);
+  }
+
   if (provider === "nvidia") {
     return fetchOpenAiLikeModels("https://integrate.api.nvidia.com/v1/models", resolveSecret("NVIDIA_API_KEY", provider), provider);
   }

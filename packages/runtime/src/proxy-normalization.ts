@@ -44,6 +44,12 @@ export interface ProviderResponseFormat {
     finish_reason: string | null;
   }>;
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  // Gemini streaming format
+  candidates?: Array<{
+    index: number;
+    content?: { parts: Array<{ text?: string }>; role?: string };
+    finishReason?: string;
+  }>;
 }
 
 export function normalizeChatCompletionRequest(
@@ -242,7 +248,16 @@ export function normalizeStreamChunk(
   let deltaContent: string | undefined;
   let finishReason: "stop" | "length" | "tool_calls" | "content_filter" | "function_call" | null = null;
 
-  if (providerChunk.choices.length > 0) {
+  // Handle Gemini streaming format (different from OpenAI)
+  if (providerId === "gemini" && providerChunk.candidates) {
+    const candidate = providerChunk.candidates[0];
+    if (candidate.content?.parts?.[0]?.text) {
+      deltaContent = candidate.content.parts[0].text;
+    }
+    if (candidate.finishReason === "STOP" || candidate.finishReason === "MAX_TOKENS") {
+      finishReason = candidate.finishReason === "MAX_TOKENS" ? "length" : "stop";
+    }
+  } else if (providerChunk.choices.length > 0) {
     const choice = providerChunk.choices[0];
     if (choice.delta?.content) {
       deltaContent = choice.delta.content;
@@ -251,9 +266,9 @@ export function normalizeStreamChunk(
   }
 
   return {
-    id: providerChunk.id,
+    id: providerChunk.id || `chatcmpl-${Date.now()}`,
     object: "chat.completion.chunk",
-    created: providerChunk.created,
+    created: providerChunk.created || Math.floor(Date.now() / 1000),
     model: openaiModelId,
     choices: [
       {

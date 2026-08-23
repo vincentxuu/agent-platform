@@ -6,13 +6,20 @@
     "anthropic",
     "gemini",
     "openrouter",
+    "opencode-zen",
     "tavily",
     "exa",
-    "jina_search",
+    "parallel",
+    "browserbase",
+    "linkup",
     "brave_search",
+    "firecrawl",
     "serpapi",
+    "serper",
+    "you",
     "bing_search",
     "search",
+    "jina_search",
     "jina"
   ],
   "providers": [
@@ -63,8 +70,8 @@
       "enabled": false,
       "credentialRefs": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
       "readinessKeys": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-      "models": ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
-      "activeModel": "gemini-2.0-flash"
+      "models": ["gemini-3.5-pro", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro", "gemini-3.7-pro", "gemini-3.7-flash"],
+      "activeModel": "gemini-3.5-flash"
     },
     {
       "id": "openrouter",
@@ -137,6 +144,66 @@
       "activeModel": "exa-search"
     },
     {
+      "id": "parallel",
+      "name": "Parallel Search",
+      "type": "search",
+      "enabled": false,
+      "credentialRefs": ["PARALLEL_API_KEY"],
+      "readinessKeys": ["PARALLEL_API_KEY"],
+      "models": ["parallel-search"],
+      "activeModel": "parallel-search"
+    },
+    {
+      "id": "browserbase",
+      "name": "Browserbase",
+      "type": "search",
+      "enabled": false,
+      "credentialRefs": ["BROWSERBASE_API_KEY"],
+      "readinessKeys": ["BROWSERBASE_API_KEY"],
+      "models": ["browserbase-search"],
+      "activeModel": "browserbase-search"
+    },
+    {
+      "id": "firecrawl",
+      "name": "Firecrawl",
+      "type": "search",
+      "enabled": false,
+      "credentialRefs": ["FIRECRAWL_API_KEY"],
+      "readinessKeys": ["FIRECRAWL_API_KEY"],
+      "models": ["firecrawl-search", "firecrawl-extract"],
+      "activeModel": "firecrawl-search"
+    },
+    {
+      "id": "linkup",
+      "name": "Linkup Search",
+      "type": "search",
+      "enabled": false,
+      "credentialRefs": ["LINKUP_API_KEY"],
+      "readinessKeys": ["LINKUP_API_KEY"],
+      "models": ["linkup-search"],
+      "activeModel": "linkup-search"
+    },
+    {
+      "id": "serper",
+      "name": "Serper",
+      "type": "search",
+      "enabled": false,
+      "credentialRefs": ["SERPER_API_KEY"],
+      "readinessKeys": ["SERPER_API_KEY"],
+      "models": ["serper-search"],
+      "activeModel": "serper-search"
+    },
+    {
+      "id": "you",
+      "name": "You.com Search",
+      "type": "search",
+      "enabled": false,
+      "credentialRefs": ["YOU_API_KEY"],
+      "readinessKeys": ["YOU_API_KEY"],
+      "models": ["you-search"],
+      "activeModel": "you-search"
+    },
+    {
       "id": "jina_search",
       "name": "Jina Search",
       "type": "search",
@@ -195,6 +262,16 @@
       "readinessKeys": ["JINA_API_KEY"],
       "models": ["jina-reader", "jina-reranker-v2-base-multilingual"],
       "activeModel": "jina-reader"
+    },
+    {
+      "id": "opencode-zen",
+      "name": "OpenCode Zen",
+      "type": "llm",
+      "enabled": false,
+      "credentialRefs": ["OPENCODE_ZEN_API_KEY"],
+      "readinessKeys": ["OPENCODE_ZEN_API_KEY"],
+      "models": ["hy3-free", "deepseek-v4-flash-free", "nemotron-3-ultra-free", "nemotron-3.5-lightning-free", "muse-spark-1.2-contributor-free", "mimo-v2.5-free", "laguna-s-2.1-free", "x-preview-f-free"],
+      "activeModel": "hy3-free"
     }
   ]
 }

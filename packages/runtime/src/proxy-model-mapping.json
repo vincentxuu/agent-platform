@@ -53,15 +53,11 @@
       "providers": ["gemini"],
       "fallback": ["openrouter"]
     },
-    "gemini-3.1-pro-preview": {
-      "providers": ["gemini"],
-      "fallback": ["openrouter"]
-    },
-    "llama-3.3-70b": {
+    "llama-3.3-70b-versatile": {
       "providers": ["groq", "cerebras", "nvidia"],
       "fallback": ["openrouter", "ollama-cloud"]
     },
-    "llama-3.1-8b": {
+    "llama-3.1-8b-instant": {
       "providers": ["groq", "cerebras"],
       "fallback": ["openrouter", "ollama"]
     },

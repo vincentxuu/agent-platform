@@ -673,47 +673,10 @@ app.post("/v1/chat/completions", async (c) => {
         const normalizedRequest = normalizeChatCompletionRequest(body, providerId);
         
         if (isStreaming) {
-          const encoder = new TextEncoder();
-          const readable = new ReadableStream({
-            async start(controller) {
-              const reader = providerStream.getReader();
-              const decoder = new TextDecoder();
-              let buffer = "";
-              
-              try {
-                while (true) {
-                  const { done, value } = await reader.read();
-                  if (done) break;
-                  
-                  buffer += decoder.decode(value, { stream: true });
-                  const lines = buffer.split("\n");
-                  buffer = lines.pop() || "";
-                  
-                  for (const line of lines) {
-                    if (line.startsWith("data: ")) {
-                      const data = line.slice(6).trim();
-                      if (data === "[DONE]") continue;
-                      try {
-                        const chunk = JSON.parse(data);
-                        const normalizedChunk = normalizeStreamChunk(chunk, model, providerId);
-                        controller.enqueue(encoder.encode(`data: ${JSON.stringify(normalizedChunk)}\n\n`));
-                      } catch {
-                        // Skip invalid JSON
-                      }
-                    }
-                  }
-                }
-              } finally {
-                reader.releaseLock();
-              }
-              
-              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-              controller.close();
-            }
-          });
+          const providerStream = await invokeProviderModelStream(c.env, config, providerId, normalizedRequest);
           
           await writeV1Audit(store, decision, "POST", "/v1/chat/completions", undefined, 200, 0, 0);
-          return new Response(readable, {
+          return new Response(providerStream, {
             headers: {
               "Content-Type": "text/event-stream",
               "Cache-Control": "no-cache",
@@ -1788,7 +1751,51 @@ async function invokeProviderModelStream(
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.error?.message || payload.message || response.statusText);
     }
-    return response.body!;
+    
+    // Convert provider streaming format to OpenAI SSE format
+    const encoder = new TextEncoder();
+    const readable = new ReadableStream({
+      async start(controller) {
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+            
+            for (const line of lines) {
+              if (line.startsWith("data: ")) {
+                const data = line.slice(6).trim();
+                if (data === "[DONE]") {
+                  controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+                  continue;
+                }
+                try {
+                  const chunk = JSON.parse(data);
+                  const normalizedChunk = normalizeStreamChunk(chunk, request.model, providerId);
+                  controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(normalizedChunk)}\n\n`));
+                } catch {
+                  // Skip invalid JSON
+                }
+              }
+            }
+          }
+        } finally {
+          reader.releaseLock();
+        }
+        
+        controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+        controller.close();
+      }
+    });
+    
+    return readable;
   }
 
   if (providerId === "anthropic") {
@@ -1830,7 +1837,87 @@ async function invokeProviderModelStream(
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.error?.message || payload.message || response.statusText);
     }
-    return response.body!;
+    
+    // Convert Anthropic streaming format to OpenAI SSE format
+    const encoder = new TextEncoder();
+    const readable = new ReadableStream({
+      async start(controller) {
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+            
+            for (const line of lines) {
+              if (line.startsWith("event: ")) {
+                const eventType = line.slice(7).trim();
+                // Store event type for next data line
+                (controller as any)._anthropicEventType = eventType;
+              } else if (line.startsWith("data: ")) {
+                const data = line.slice(6).trim();
+                if (data === "[DONE]") {
+                  controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+                  continue;
+                }
+                try {
+                  const chunk = JSON.parse(data);
+                  const eventType = (controller as any)._anthropicEventType || "content_block_delta";
+                  delete (controller as any)._anthropicEventType;
+                  
+                  // Convert Anthropic streaming format to OpenAI SSE format
+                  let normalizedChunk: any;
+                  if (eventType === "content_block_delta" && chunk.delta?.text) {
+                    normalizedChunk = {
+                      id: `chatcmpl-${Date.now()}`,
+                      object: "chat.completion.chunk",
+                      created: Math.floor(Date.now() / 1000),
+                      model: request.model,
+                      choices: [{
+                        index: 0,
+                        delta: { content: chunk.delta.text },
+                        finish_reason: null
+                      }]
+                    };
+                  } else if (eventType === "message_stop") {
+                    normalizedChunk = {
+                      id: `chatcmpl-${Date.now()}`,
+                      object: "chat.completion.chunk",
+                      created: Math.floor(Date.now() / 1000),
+                      model: request.model,
+                      choices: [{
+                        index: 0,
+                        delta: {},
+                        finish_reason: "stop"
+                      }]
+                    };
+                  } else {
+                    continue; // Skip other event types
+                  }
+                  
+                  controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(normalizedChunk)}\n\n`));
+                } catch {
+                  // Skip invalid JSON
+                }
+              }
+            }
+          }
+        } finally {
+          reader.releaseLock();
+        }
+        
+        controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+        controller.close();
+      }
+    });
+    
+    return readable;
   }
 
   if (providerId === "gemini") {
@@ -1852,7 +1939,7 @@ async function invokeProviderModelStream(
       generationConfig: Object.keys(generationConfig).length > 0 ? generationConfig : undefined
     };
     
-    // Gemini API expects model name in format "models/gemini-2.0-flash" for streaming
+    const apiKey = providerSecret(env, config, providerId);
     const modelName = request.model.startsWith("models/") ? request.model : `models/${request.model}`;
     const url = `https://generativelanguage.googleapis.com/v1beta/${modelName}:streamGenerateContent?key=${encodeURIComponent(apiKey)}`;
     
@@ -1865,7 +1952,50 @@ async function invokeProviderModelStream(
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.error?.message || payload.message || response.statusText);
     }
-    return response.body!;
+    
+    // Convert Google's streaming format to OpenAI SSE format
+    // Note: Google returns raw JSON objects, not SSE format
+    const encoder = new TextEncoder();
+    const readable = new ReadableStream({
+      async start(controller) {
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+            
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed) continue;
+              
+              // Google returns raw JSON objects (not SSE format)
+              // They can be either complete objects or partial chunks
+              try {
+                const chunk = JSON.parse(trimmed);
+                const normalizedChunk = normalizeStreamChunk(chunk, request.model, providerId);
+                controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(normalizedChunk)}\n\n`));
+              } catch {
+                // Skip invalid JSON
+              }
+            }
+          }
+        } finally {
+          reader.releaseLock();
+        }
+        
+        controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+        controller.close();
+      }
+    });
+    
+    return readable;
   }
 
   if (providerId === "workers_ai") {
