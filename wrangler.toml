@@ -4,6 +4,34 @@ compatibility_date = "2026-05-21"
 compatibility_flags = ["nodejs_compat"]
 assets = { directory = "apps/web/dist", binding = "ASSETS" }
 
+# Routing
+# --------
+# The Worker is fronted by Cloudflare's default workers.dev subdomain and serves
+# ALL paths through the Hono router in apps/worker/src/index.ts, so no explicit
+# `[[routes]]` entries are required for the proxy endpoints (or any other path).
+#
+# OpenAI-compatible proxy endpoints (registered in apps/worker/src/index.ts):
+#   GET  /v1/models             — list models (requires `proxy:write` scope)
+#   POST /v1/chat/completions   — chat completions, streaming + non-streaming
+#
+# If you put a custom domain on this Worker (e.g. api.example.com) and want to
+# restrict the proxy endpoints to that domain, add routes below. Leaving the
+# template commented out keeps the default workers.dev ingress working.
+
+# [[routes]]
+# pattern = "api.example.com/v1/models*"
+# zone_name = "example.com"
+#
+# [[routes]]
+# pattern = "api.example.com/v1/chat/completions*"
+# zone_name = "example.com"
+
+# Bindings used by the proxy endpoints:
+#   DB       — api-clients table for auth + audit log writes
+#   CACHE    — per-client rate limit + budget window counters
+#   AI       — (optional) Workers AI adapter invoked via provider-catalog
+# No new bindings were added for the openai-proxy-api change (8.2).
+
 [[d1_databases]]
 binding = "DB"
 database_name = "agent-platform"

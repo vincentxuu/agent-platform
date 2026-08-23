@@ -1,0 +1,17 @@
+{
+  "$comment": "Example API client configuration for OpenAI-compatible proxy access. POST this JSON body to /api/api-clients on your deployed Worker (or http://127.0.0.1:8787/api/api-clients locally). The server returns { client: {...}, key: 'ak_live_...' } where `key` is the plaintext API key shown only once — store it securely.",
+  "$example_curl": "curl -X POST $BASE/api/api-clients -H 'Content-Type: application/json' -d @proxy-client.example.json",
+  "name": "openai-proxy-client",
+  "scopes": ["proxy:write"],
+  "rateLimit": {
+    "requestsPerMin": 60
+  },
+  "budget": {
+    "proxyMaxCostUsd": 10.00,
+    "proxyMaxTokens": 1000000,
+    "proxyWindow": "monthly",
+    "proxyDailyCost": 5.00,
+    "proxyDailyTokens": 250000,
+    "proxyRateLimitRpm": 60
+  }
+}

@@ -55,10 +55,10 @@
 
 ## 8. Configuration & Deployment
 
-- [ ] 8.1 Add route patterns for `/v1/models*` and `/v1/chat/completions*` in `wrangler.toml`
-- [ ] 8.2 Update `wrangler.toml` with any new bindings needed
-- [ ] 8.3 Document model mapping config format in README or docs
-- [ ] 8.4 Create example API client configuration for proxy access
+- [x] 8.1 Route registration for `/v1/models*` and `/v1/chat/completions*` in `wrangler.toml` — Worker serves all paths via the Hono router on workers.dev, so no `[[routes]]` entries are required. Added a commented template in `wrangler.toml` for custom-domain deployments.
+- [x] 8.2 New bindings needed — none. Proxy endpoints reuse existing `DB` (audit log + api-clients table) and `CACHE` (rate-limit + budget window counters) bindings. No `wrangler.toml` change required beyond documentation.
+- [x] 8.3 README proxy section added: auth, endpoints, cURL examples for list-models / chat-completion (streaming + non-streaming), OpenAI SDK usage (Python), model routing + fallback table, model mapping config format, policy controls, error response codes (see README.md "OpenAI-Compatible Proxy API (`/v1`)").
+- [x] 8.4 Example API client configuration at `packages/runtime/src/proxy-client.example.json` showing the body to POST to `/api/api-clients` to create a proxy-only client (`scopes: ["proxy:write"]` + `proxy*` budget fields).
 
 ## 9. Testing & Validation
 
